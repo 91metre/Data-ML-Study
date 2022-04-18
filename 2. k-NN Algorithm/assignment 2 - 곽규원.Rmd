@@ -1,0 +1,231 @@
+---
+title: "2. k-NN Algorithm"
+author: "Gyuwon Kwak"
+date: '2021 4 12 '
+output: html_document
+---
+
+#Assignment 2
+
+## 1번 문제
+
+
+### 라이브러리
+```{r}
+
+library(class)
+library(caret)
+library(ggplot2)
+
+```
+
+### 데이터 선처리
+```{r}
+
+#데이터 읽어오기
+bank <- read.csv("CommonBank.csv")
+
+# ID, zipcode 제외
+bank <- bank[,c(-1, -5)]
+
+# 분석을 위해서 Target Variable을 Factor로 코딩한다.
+bank$PersonalLoan <- factor(bank$PersonalLoan, level = c(0,1), 
+                            labels = c("R", "A"))
+
+str(bank)
+
+# normalization 정의
+z_normal <- function(x){
+  return((x-min(x) / max(x) - min(x)))
+}
+
+#scale 일치시키기, 팩터 열 제외
+bank_n <- as.data.frame(lapply(bank[-8], z_normal))
+
+
+str(bank_n)
+
+# Training 셋, test 셋 분리
+bank_train <- bank_n[1:4000,]
+bank_test <- bank_n[4001:5000,]
+```
+
+### target 데이터 분포 확인하기
+```{r}
+
+# 라벨 생성하기
+bank_train_labels <- bank[1:4000, 8]
+bank_test_labels <- bank[4001:5000, 8]
+
+
+#Target인 Persnal Loan이 어느정도 있는지 비교해보기.
+table(bank_train_labels)
+table(bank_test_labels)
+
+397/4000
+83/1000
+```
+
+training set에는 Accept가 약 9.9%정도 차지하고 있고,
+Test set에는 Accept가 약 8.3% 정도 차지하고 있다.
+
+
+## 2번 문제
+
+### 5-nn 적용
+```{r}
+
+# 5-nn 분석
+bank_test_pred <- knn(train = bank_train, test = bank_test, cl = bank_train_labels, k = 5)
+
+# 분석을 위해 컨퓨전 매트릭스 시행
+confuM1 <- confusionMatrix(bank_test_pred, bank_test_labels)
+
+confuM1
+# 정밀도 측정
+880/(880 + 53)
+```
+가입하지 않았는데, 가입하지 않았다고 예측(TP): 880명,
+가입하지 않았는데, 가입했다고 예측 (FN): 37명,
+가입했는데, 가입하지 않았다고 예측 (FP): 53명,
+가입했는데, 가입했다고 예측 (TN): 30명
+
+정확도는 0.91
+정밀도는 0.94 
+민감도는 0.959
+특이도는 0.36 이다.
+
+
+## 3번 문제
+
+### Training Set 중 마지막 800명 데이터를 validation set 사용
+```{r}
+
+# 3200번 까지를 training set으로, 마지막 800번을 Validation Set으로 설정
+bank_train_2 <- bank_n[1:3200,]
+bank_vali <- bank_n[3201:4000,]
+
+# 라벨 설정
+bank_train_2_labels <- bank[1:3200, 8]
+bank_vali_labels <- bank[3201:4000, 8]
+```
+
+### 다양한 k에 대해 k-nn 분석 실행
+```{r}
+
+# k-nn 분석 50번 반복 실행
+
+# 각 결과에서 정확도, 정밀도, 민감도, 특이도 저장할 벡터 선언
+Acc <- c()
+Prec <- c()
+Sens <- c()
+Spec <- c()
+
+# k를 1부터 50까지 바꿔가면서 Confusion Matrix만들기
+for (i in 1:50){
+  confuM2 <- confusionMatrix( (knn(train = bank_train_2, test = bank_vali, 
+                        cl = bank_train_2_labels, k = i)), bank_vali_labels   )
+  
+  # Confusion Matrix 중에서 정확도, 정밀도, 민감도, 특이도를 따로 모아준다.
+  Acc <- c(Acc, confuM2$overall[1])
+  Prec <- c(Prec, confuM2$table[1]/(confuM2$table[1] + confuM2$table[1,2]))
+  Sens <- c(Sens, confuM2$byClass[1])
+  Spec <- c(Spec, confuM2$byClass[2])
+}
+
+# 정확도의 최대값
+max(Acc)
+ 
+# 정확도가 최대일 때 값
+which.max(Acc)
+
+# whcih.max값이 4 이므로 k값은 4일 때 정확도가 최대가 된다.
+
+#정확도가 최대일때 정밀도, 민감도, 특이도 값
+Prec[4]
+Sens[4]
+Spec[4]
+
+```
+k가 4를 가질 때 정확도가 91.1%로 정확도가 제일 높다. 
+그리고 이때 정밀도는 94.1%, 민감도는 96.5%, 특이도는 0.39%이다.
+
+
+## 4번문제
+
+### 5-fold Cross Validation 수행
+```{r}
+# train Set 분리
+bank_train_4 <- bank[1:4000,]
+bank_test_4 <- bank[4001:5000,]
+
+#z-score normalization 이용
+z_normalized <- c("center", "scale")
+
+#seed 설정
+set.seed(123)
+
+# 5-fold cross validation을 5번 수행
+bank_cv  <- trainControl(method = "repeatedcv", number =5, repeats = 5)
+
+# 파라미터 튜닝, k를 1부터 50까지 바꿔가며 수행한다.
+bank_tune_grid <- expand.grid(k=1:50)
+
+# k값을 1부터 50까지 바꿔가면서, 5-fold Cross Validation을 5번 수행
+bank_knn_fit <- train(data = bank_train_4, PersonalLoan~., method = "knn",
+                      trControl = bank_cv, preProcess = z_normalized,
+                      tuneGrid = bank_tune_grid)
+
+bank_knn_fit
+
+ggplot(bank_knn_fit) + theme_bw()
+```
+k값을 1부터 50까지 바꿔가면서, test set의 4000개의 데이터에 대하여
+5-fold Cross Validation을 5번 수행했을 때 Accruacy값이 가장 높은 k는 3이었다.
+
+### k값을 3으로 하여 최종 Model에 test set을 적용
+```{r}
+
+# 5-nn 분석
+bank_test_pred_4 <- knn(train = bank_train, test = bank_test, cl = bank_train_labels, k = 3)
+
+# 분석을 위해 컨퓨전 매트릭스 시행
+confuM4 <- confusionMatrix(bank_test_pred_4, bank_test_labels)
+
+confuM4
+# 정밀도 측정
+880/(880 + 46)
+
+```
+가입하지 않았는데, 가입하지 않았다고 예측(TP): 880명,
+가입하지 않았는데, 가입했다고 예측 (FN): 37명,
+가입했는데, 가입하지 않았다고 예측 (FP): 46명,
+가입했는데, 가입했다고 예측 (TN): 37명
+
+정확도는 0.917
+정밀도는 0.95
+민감도는 0.959
+특이도는 0.44 이다.
+
+
+
+## 문제 5번
+
+3번 문제에서는 Training set중에서 임의로 앞에 3200번까지의 Data는 Training 셋으로,
+나머지 800번의 Data는 Validation 셋으로 임의로 나누어서 Validation을 진행했고,
+4번 문제에서는 Training set을 5개로 나눈 Cross Validation을 각각 5번 진행했다.
+
+3번 문제에서 Training set의 일부를 단순하게 validation set으로 나누는 경우는,
+직관적이지만, Data가 많지 않을 때 수행하기 힘들다는 단점이 있다. 
+(Data가 많을 때는 크게 상관 없다.)
+
+4번 문제에서 사용한 Cross Validation은 과정이 조금 복잡하지만,
+Data가 많지 않을 때 활용할 수 있고, 모든 Training Data를 각각 Training 및
+Validation 하여 평균 낸 값을 사용하기 때문에 분산이 줄어든다.
+
+
+
+
+```{r}
+
+```
