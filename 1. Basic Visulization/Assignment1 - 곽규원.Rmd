@@ -1,0 +1,196 @@
+---
+title: "1. Basic Visualization"
+author: "Gyuwon Kwak"
+date: '2021 3 31 '
+output: html_document
+---
+
+# 과제 1번
+
+### 준비 단계
+```{r}
+#필요한 library 추가 및 파일 경로 설정
+
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(ggmap)
+metro <- read.csv("metro.csv")
+```
+
+### 분석에 맞게 데이터를 선처리한다.
+
+```{r}
+
+# 11월 1일의 숭실대 입구역 데이터 골라내기
+q1data1 <- subset(metro, 날짜 == "2019-11-01")
+q1data <- subset(q1data1, 역명 == "숭실대입구(살피재)")
+
+#분석에 맞는 데이터 프레임 만들기
+#각 시간대별로 들어가있는 인원 수 데이터를 승차, 하차 데이터 하나로 묶는 데이터 프레임 만들기
+
+#승차 데이터 벡터화
+onboardpre <-  q1data[1,7:30]
+onboard <- as.vector(t(onboardpre))
+
+#하차 데이터 벡터화
+offboardpre <-  q1data[2,7:30]
+offboard <- as.vector(t(offboardpre))
+
+#데이터 프레임 만들기
+q1dataf <- data.frame(time = c(4:27), onboard = onboard, offboard= offboard)
+
+```
+
+### 그래프 그리기
+
+```{r}
+
+#각 승차, 하차 칼럼에 대한 두 개의 그래프를 중첩 출력
+#geom_line과 geom_point 두개를 사용하여 시간에 따른 변화를 확실히 볼 수 있다.
+
+ggplot(q1dataf) + geom_line(aes(x=time, y= onboard), color="blue") + 
+  geom_point(aes(x=time, y= onboard),alpha=.4, size=3, color= "blue") +
+  geom_line(aes(x=time, y= offboard), color="red")+
+  geom_point(aes(x=time, y= offboard),alpha=.4, size=3, color="red") +
+  scale_x_continuous(breaks= seq(4,27,4), limits = c(4,27)) +
+    labs(title="숭실대입구(살피재) 역의 11월 1일의 시간대별 승차 및 하차 인원 수",
+       subtitle = "파란색: 승차인원, 빨간색: 하차인원", x= "시간", y="승하차 인원",
+       colors = "승하차 구분") + scale_color_manual(breaks=c("blue", "red"),
+  labels =c("승차", "하차"), values=c("blue", "red"))
+  
+
+```
+
+# 과제 2번
+
+### 필요한 데이터 선별하여 가져오기
+```{r}
+
+#시간대로 나눠져있는 인원 수 하나로 변환
+metrodata <- gather(metro, key= "time_hour", value="count", X04...05:X03...04)
+
+#chr인 날짜 변수를 Date 형태로 변환
+metrodata$날짜 <- as.Date(as.character(metrodata$날짜), format="%Y-%m-%d")
+
+#chr인 time_hour 변수를 팩터로 변환
+metrodata$time_hour <- factor(metrodata$time_hour, ordered = TRUE)
+
+#숭실대 입구역 데이터 골라내기
+q2data_pre <-  subset(metrodata, 역명 == "숭실대입구(살피재)")
+
+#11월 4~10일 데이터 골라내기
+q2data <- subset(q2data_pre, 날짜 > "2019-11-03" & 날짜 < "2019-11-11")
+
+#승차 데이터 만들기
+q2data_onboard <- subset(q2data, 구분=="승차")
+q2data_offboard <- subset(q2data, 구분=="하차")
+
+```
+
+
+### 승차인원 히트맵 그리기
+```{r}
+
+ggplot(q2data_onboard, aes(x = time_hour, y = 날짜, fill = count)) + geom_tile() +
+  theme_minimal() + labs(title="11월 3일(월)부터 10일(일)까지 각 요일,시간대별 승차인원 분포",
+                        x= "시간", y="날짜", fill="승차 인원") +
+  scale_x_discrete(labels=c(0:23)) + scale_y_date(breaks = "1 day")
+
+
+```
+
+
+### 하차인원 그래프 그리기
+```{r}
+
+ggplot(q2data_offboard, aes(x = time_hour, y = 날짜, fill = count)) + geom_tile() +
+  theme_minimal() + labs(title="11월 3일(월)부터 10일(일)까지 각 요일,시간대별 하차인원 분포",
+                        x= "시간", y="날짜", fill="하차 인원") +
+  scale_x_discrete(labels=c(0:23)) + scale_y_date(breaks = "1 day")
+
+```
+
+
+# 과제 3번
+
+### 유동인구 수 취합 및 상위 20개 역 선정
+```{r}
+
+
+#aggregate 함수를 쓰기 위해서 역명을 팩터로 전환
+metrodata$역명 <- factor(metrodata$역명, ordered=TRUE)
+
+#숭실대 입구역 데이터 추출
+q3datapre <- subset(metrodata, 호선 == "7호선")
+
+
+#필요한 역명(5번 컬럼), 인원 수(8번 컬럼) 데이터 추출
+q3datapre_sub <- q3datapre[c(5,8)]
+
+
+#역명을 기준으로 유동인구(월간 승하차 전체인원) 계산
+#합할 때 첫 칼럼(역이름)을 제거한 상태로 합함
+q3datapre_total <- aggregate( x= q3datapre_sub[-1], by=list(q3datapre$역명), sum)
+
+#유동인구수 기준으로 내림차순으로 정렬
+q3dataarr <- arrange(q3datapre_total, -count)
+str(q3dataarr)
+
+# 유동인구 수 상위 20개 역 선정 
+q3data <- q3dataarr[1:20,]
+```
+
+### 유동인구 수 그래프 그리기 
+```{r}
+
+ggplot(q3data, aes(x=reorder(Group.1,-count) , y=count)) +
+  geom_bar(stat="identity", fill="cornflowerblue") +
+  theme_minimal() + labs(title="2019년 11월 7호선 유동인구 수 상위 20개 역의 유동인구 수", 
+                         x= "지하철 역", y="유동인구 수") + 
+  theme(axis.text.x = element_text(angle=45, hjust =1)) + 
+  geom_text(aes(label=count), angle = 45) + 
+  scale_y_continuous(breaks = seq(0, 3000000, 500000), limits=c(0, 3000000))
+  
+
+```
+# 과제 4번
+
+### 데이터 파일 선처리
+```{r}
+
+#데이터 파일 읽기
+metroco <- read.csv("metro_coord.csv")
+
+#7호선 역 골라내기
+q4datapre <- subset(metroco, 호선 == 7)
+
+#유동인구 수가 들어가있는 데이터 프레임인 q3datapre_total 과 합쳐야 함.
+
+#역명 기준으로 합치기 위해 칼럼의 이름을 맞춰줌
+colnames(q3datapre_total) <- c("역명", "유동인구수")
+
+#합치기
+q4data <- merge(q4datapre, q3datapre_total, by = "역명")
+str(q4data)
+```
+
+### 지도 데이터 처리
+```{r}
+
+#서울시 지도 불러오기
+bbox_seoul <- c(left = min(q4data$lon)-0.07, bottom = min(q4data$lat)-0.07, 
+                right = max(q4data$lon)+0.07, top =max(q4data$lat)+0.07)
+seoul <- get_stamenmap(bbox_seoul, zoom= 12, maptype = "terrain")
+
+```
+
+### 서울시 지도 위에 7호선 역 위치와 유동인구 수 나타나기
+```{r}
+
+ggmap(seoul, base_layer = 
+        ggplot(q4data, aes(x= lon, y=lat, size = 유동인구수, alpha = 유동인구수))) +
+  geom_point(color = "red") + labs(title = "2019년 11월 7호선 역 유동인구", 
+                                   x="", y="")
+
+```
