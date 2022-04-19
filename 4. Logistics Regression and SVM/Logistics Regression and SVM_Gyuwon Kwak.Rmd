@@ -1,0 +1,711 @@
+---
+title: "4. Logistics Regression and Support Vector Machine"
+author: "Gyuwon Kwak"
+date: '2021 5 12 '
+output: html_document
+---
+
+#1. Predicting Delayed Flight
+```{r}
+# 필요한 패키지 Library 모음음
+library(forcats)
+library(psych)
+library(ggplot2)
+library(caret)
+library(ROCR)
+library(glmnet)
+library(caret)
+library(ISLR)
+library(e1071)
+library(kernlab)
+
+#파일 읽어오기
+fly <- read.csv("FlightRecords.csv")
+```
+
+
+## 문제 1
+```{r}
+#데이터 프레임 파악하기
+str(fly)
+
+#필요한 7개 변수만 남기고 지우기
+fly <- fly[, c(-1, -5, -6, -7, -11, -12)]
+
+# 항공기 출발시각 6시 이전, 22시 이후 데이터 제외
+fly <- subset(fly, 600 < deptime & deptime < 2200 )
+
+# 출발시각 범주형 변수로 변환하기
+# 100으로 나눠주고 소숫점 버리면 시간만 남음, floor 함수 사용
+fly$deptime <- fly$deptime/100
+fly$deptime <- floor(fly$deptime)
+
+#factor로 변환하기
+fly$deptime <- as.factor(fly$deptime)
+
+#dayweek 변수를 factor로 변환
+fly$dayweek <- as.factor(fly$dayweek)
+
+#weather 변수를 factor로 변환
+fly$weather <- as.factor(fly$weather)
+
+#delay변수가 가지는 level의 순서 바꾸기
+fly$delay <- factor(fly$delay, levels = c("ontime", "delayed"))
+
+#잘 바뀌었는지 확인하기
+str(fly)
+
+```
+## 문제 2
+### 데이터 정리, 요일별 연착 비율
+```{r}
+
+# 2번 문제에서 사용해줄 데이터프레임 만들기
+q2fly <- fly
+
+# delayed를 1, ontime을 0으로 맞추기
+q2fly$delay <- fct_recode(q2fly$delay, "0" = "ontime", "1" = "delayed")
+q2fly$delay <- as.numeric(as.character(q2fly$delay))
+
+# 요일에 따라 정리, 0과1의 평균을 내면 delay의 비율을 알 수 있다
+# dayweek범주에 따른 평균값을 새 dataframe으로 만들기
+q2dayweek <- aggregate(q2fly$delay, by=list(fly$dayweek), FUN=mean)
+
+# Bar plot 그리기
+ggplot(q2dayweek, aes(x= Group.1 , y= x)) + geom_bar(stat = "identity") +
+  geom_text(aes(label = round(x,4)), vjust =-0.5) +
+  labs(title = "요일 별 연착 비율", x="요일", y="연착비율" ) +
+  scale_x_discrete(labels = c("월", "화", "수", "목","금", "토", "일"))
+
+```
+요일 별 연착 비율을 살펴보았을 때 주로 월요일과 일요일에서 연착 비율이 높았고,  
+화요일부터 토요일까지는 연착 피율이 대체적으로 줄어들었다.  
+토요일에 출발하는 비행기가 연착비율이 제일 적었다.
+
+### 출발 시간대 별 연착 비율
+```{r}
+
+# deptime범주에 따른 평균값을 새 dataframe으로 만들기
+q2deptime <- aggregate(q2fly$delay, by=list(fly$deptime), FUN=mean)
+
+# Bar plot 그리기
+ggplot(q2deptime, aes(x= Group.1 , y= x)) + geom_bar(stat = "identity") +
+  geom_text(aes(label = round(x,3)), vjust =-0.5) +
+  labs(title = "출발 시간대 별 연착 비율", x="출발 시간대", y="연착비율" ) 
+
+```
+출발 시간대 별 연착 비율을 살펴보았을 때  
+19시에 출발하는 비행기는 무려 51.9%가까이 연착을 할 정도로 연착 비율이 높았으며,  
+12시에 출발하는 비행기는 6.7%만 연착을 하여 연착 비율이 제일 낮았다.
+
+### 출발 공항 별 연착비율
+```{r}
+
+# origin 범주에 따른 평균값을 새 dataframe으로 만들기
+q2origin <- aggregate(q2fly$delay, by=list(fly$origin), FUN=mean)
+
+# Bar plot 그리기
+ggplot(q2origin, aes(x= Group.1 , y= x)) + geom_bar(stat = "identity") +
+  geom_text(aes(label = round(x,3)), vjust =-0.5) +
+  labs(title = "출발 공항 별 연착 비율", x="출발 공항", y="연착비율" ) +
+  scale_x_discrete(labels = c("Baltimore-Washington Int’l", "Reagan Nation", 
+                              "Dulles"))
+
+```
+
+출발 공항 별 연착 비율을 살펴보았을 때  
+Baltimore-Washington Int’l 공항 출발 비행기의 연착 비율이 0.255로 제일 높았고,  
+Reagan Nation 공항 출발 비행기의 연착 비율이 0.162로 제일 낮았다.
+
+### 도착 공항 별 연착 비율
+```{r}
+
+# dest 범주에 따른 평균값을 새 dataframe으로 만들기
+q2dest <- aggregate(q2fly$delay, by=list(fly$dest), FUN=mean)
+
+# Bar plot 그리기
+ggplot(q2dest, aes(x= Group.1 , y= x)) + geom_bar(stat = "identity") +
+  geom_text(aes(label = round(x,3)), vjust =-0.5) +
+  labs(title = "도착 공항 별 연착 비율", x="도착 공항", y="연착비율" ) +
+  scale_x_discrete(labels = c("Newark", "Kennedy", "LaGuardia"))
+
+```
+
+도착 공항 별 연착 비율을 살펴보았을 때  
+Newark 공항 도착 비행기의 연착 비율이 23.3%로 제일 높았고,  
+LaGuardia 공항 도착 비행기의 연착 비율이  15.5%로 제일 낮았다.
+
+### 항공사 별 연착 비율
+```{r}
+
+# carrier 범주에 따른 평균값을 새 dataframe으로 만들기
+q2carrier <- aggregate(q2fly$delay, by=list(fly$carrier), FUN=mean)
+
+# Bar plot 그리기
+ggplot(q2carrier, aes(x= Group.1 , y= x)) + geom_bar(stat = "identity") +
+  geom_text(aes(label = round(x,3))) +
+  coord_flip() +
+  labs(title = "항공사 별 연착 비율", x="항공사", y="연착비율" ) +
+  scale_x_discrete(labels =c("Continental", "Atlantic Coast", "Delta", 
+   "American Eagle", "Comair", "Continental Express", "United", "USAirways"))
+
+```
+
+항공사별 연착 비율을 살펴보았을 때  
+American Eagle 항공의 연착 비율이 28.9%로 제일 높았고,  
+USAirways 항공의 연착 비율이 8.7%로 제일 낮았다.
+
+### 날씨 별 연착 비율
+```{r}
+
+# weather 범주에 따른 평균값을 새 dataframe으로 만들기
+q2weather <- aggregate(q2fly$delay, by=list(fly$weather), FUN=mean)
+
+# Bar plot 그리기
+ggplot(q2weather, aes(x= Group.1 , y= x)) + geom_bar(stat = "identity") +
+  geom_text(aes(label = round(x,3)), vjust =-0.5) +
+  labs(title = "날씨 별 연착 비율", x="날씨", y="연착비율" ) +
+   scale_x_discrete(labels =c("좋은 날씨", "나쁜 날씨"))
+
+```
+날씨 별 연착 비율을 살펴봤을 때  
+나쁜 날씨일 때는 100% 연착이었고,  
+좋은 날씨일 떄는 17.7% 연착이었다.
+
+## 문제 3
+```{r}
+#7개의 모든 변수들 간의 상관관계 시각화
+pairs.panels(fly[c("dayweek", "deptime", "origin", "dest", "carrier",
+                   "weather", "delay")])
+```
+
+|관계|내용|
+|:---:|:---|
+|전체적인 관계|대체적으로 상관계수가 0.1 이하로 약한 상관관계가 있는 것으로 나타났다|
+|항공사-출발공항| 항공사별로 주로 취항하고 있는 공항이 다르기 때문에 상관관계가 비교적 높았다.|
+|연착-날씨| 항공산업은 날씨의 영향을 많이 받으므로 날씨와 연착의 상관관계가 비교적 높았다.|
+|연착-출발시간| 특정 시간대의 연착 비율이 높다는 것을 알 수 있었다.|
+
+
+##문제 4
+```{r}
+# stratified samling은 caret패키지의 createDataPartition 사용
+# 디폴트 값으로 stratified random split을 실행함
+
+set.seed(100)
+strindex <- createDataPartition(fly$delay, p = .7, list = FALSE)
+
+#train set과 test 셋 분할
+fly_train <- fly[strindex,]
+fly_test <- fly[-strindex,]
+
+#Train Data Set의 delay 분포 확인
+table(fly_train$delay)
+#Train Data Set의 delay 비율
+287/1225
+
+#Test Data Set의 delay 분포 확인
+table(fly_test$delay)
+#Test Data Set의 delay 비율
+122/525
+
+#Bar plot으로 delay 분포 확인
+ggplot(fly_train, aes(x=delay)) + geom_bar(fill = "skyblue") + theme_minimal() + labs(title ="Training Set의 Delay 분포")
+
+ggplot(fly_test, aes(x=delay)) + geom_bar(fill = "skyblue") + theme_minimal() + labs(title ="Test Set의 Delay 분포")
+```
+
+|Dataset|delayed의 비율|
+|:---:|:---:|
+|Train Data|0.2342857|
+|Test Data|0.232381|
+
+두 Data Set의 Delay 에서 Ontime과 delayed의 비율이 거의 같다.  
+Bar plot으로 확인했을 때도 분표가 비슷한 것을 알 수 있다.
+
+##문제 5
+```{r}
+# weather가 Bad일 때 delay변수가 delayed되는 Baseline Model 생성
+fly_base <- factor(sign(fly_train$weather == "Bad"), levels = c(0,1),
+                   labels=c("ontime", "delayed"))
+
+#컨퓨전 매트릭스 생성
+confusionMatrix(fly_base, fly_train$delay, positive ="delayed")
+
+```
+
+Baseline모델은 Training Set에 대해서 81.02%의 Accuracy를 가진다.  
+민감도는 0, 특이도는 1이다.  
+하지만 실제 Delay인 것이 Delay로 예측된 비율인 민감도가 0고,
+실제 ontime인 것이 ontime으로 예측된 비율인 특이도가 1이기 때문에
+이 Baseline 보다는 다른 모델을 사용하는 것이 좋다.
+
+
+## 문제 6
+### 문제 6.1
+```{r}
+# delay에 대해 모든 feature를 사용한 model 만들기
+q6lr <- glm(delay~., data = fly_train, family = "binomial")
+summary(q6lr)
+```
+
+deptime19의 Regression Coefficient값은 2.376676이다.  
+먼저 이 값이 유의하기 때문에,  
+19시~20시 사이에 출발하는 항공기와 연착과의 관계가 있다는 것을 알 수 있다.
+
+
+Logistic Regression 에서는 Coefficient값이 선형의 관계를 의미하지 않는다.  
+여기서 Coefficient값은 각 feature를 분류함에 있어
+얼마나 중요하게 영향을 미치는 지의 척도로 볼 수 있다. (가중치 개념)
+
+### 문제 6.2
+```{r}
+
+#문제 조건에 맞는 Dataframe 만들기
+q62data <- data.frame(weather = "0", dayweek = "5", deptime = "15", origin = "IAD",
+                      dest = "JFK", carrier = "DL")
+
+#predict함수로 예측할 수 있다.
+q62_test <- predict(q6lr, q62data, type= "response")
+q62_test
+```
+
+문제 조건에 맞는 항공기가 연착될 확률은 31.34%정도이다.
+
+### 문제 6.3
+```{r}
+
+#test set에 대해서 예측 실행
+q63test_prob <- predict(q6lr, fly_test, type = "response")
+
+#test set의 data수 = 647개
+#Threshold가 0.2일 때
+q63test_pred2 <- rep("ontime", 647)
+
+#Confusion Matrix 계산
+q63test_pred2[q63test_prob > 0.2] <- "delayed"
+confusionMatrix(factor(q63test_pred2, levels = c("ontime", "delayed")), 
+                fly_test$delay, positive = "delayed")
+
+```
+
+```{r}
+#Threshold가 0.3일 때
+q63test_pred3 <- rep("ontime", 647)
+
+#Confusion Matrix 계산
+q63test_pred3[q63test_prob > 0.3] <- "delayed"
+confusionMatrix(factor(q63test_pred3, levels = c("ontime", "delayed")), 
+                fly_test$delay, positive = "delayed")
+
+```
+
+```{r}
+#Threshold가 0.5일 때
+q63test_pred5 <- rep("ontime", 647)
+
+#Confusion Matrix 계산
+q63test_pred5[q63test_prob > 0.5] <- "delayed"
+confusionMatrix(factor(q63test_pred5, levels = c("ontime", "delayed")), 
+                fly_test$delay, positive = "delayed")
+
+```
+
+```{r}
+#Threshold가 0.7일 때
+q63test_pred7 <- rep("ontime", 647)
+
+#Confusion Matrix 계산
+q63test_pred7[q63test_prob > 0.7] <- "delayed"
+confusionMatrix(factor(q63test_pred7, levels = c("ontime", "delayed")), 
+                fly_test$delay, positive = "delayed")
+
+```
+
+**K값 변화에 따른 Performance값 변화**
+
+|k값|Accuracy|Sensitivity|Specificity|
+|:---:|:---:|:---:|:---:|
+|0.2|0.6909|0.6639|0.6971|
+|0.3|0.7836|0.43443|0.86476|
+|0.5|0.847|0.23770|0.98857|
+|0.7|0.8253|0.09016|0.99619|
+|비고|증가,마지막 감소|감소|증가|
+
+\1. K값의 변화에 따른 Accuracy 변화  
+ \ 정확도는 0.5일 때 까지 증가하다가 0.7일때 감소했다.  
+ \ 정확도는 무조건 높거나 낮을 때 좋은 것이 아니라 적당한 값일때 제일 좋다
+ 
+ 
+\2. K값의 변화에 따른 Sensitivity 변화  
+ \ 민감도는 K값이 올라갈 때마다 계속 감소하였다.  
+ \ 민감도는 실제 delay를 얼마나 잘 예측했는지 나타냄으로 Threshold값이 높아짐에 따라 낮아진다. 
+ 
+\3. K값의 변화에 따른 specificity 변화  
+ \ 특이도는 K값이 올라갈 때마다 계속 증가하였다.  
+ \ 특이도는 실제 ontime을 얼마나 잘 예측했는지 나타냄으로 Threshold값이 높아짐에 따라 높아진다.
+
+### 문제 6.4
+
+Regression Model 중 Accuracy가 제일 높은 Threshold 0.5일 때를 비교하자.  
+
+|모델|Accuracy|Sensitivity|Specificity|
+|:---:|:---:|:---:|:---:|
+|Baseline|0.8102|0|1|
+|L. Reg. (k=0.5)|0.847|0.23770|0.98857|
+
+비교해보면, 특이도를 제외하고는 모두 Regression모델의 성능이 좋았다.  
+특히 Basline Model은 민감도가 0이기 때문에 사용하면 안된다.
+
+##문제 7
+### 문제 7.1
+```{r}
+
+# 모든 feature를 사용하는 Regression 모델 q6lr
+# backward stepwise selection 진행
+q7bstep <- step(q6lr, direction = "backward")
+coef(q7bstep)
+
+```
+
+backward stepwise selection 적용 시 31개의 feature가 포함되었다.
+
+```{r}
+# forward stepwise selection 진행
+q7fstep <- step(q6lr, direction = "forward")
+coef(q7fstep)
+
+```
+
+forward stepwise selection 적용시 33개의 feature가 포함되었다.  
+추가된 2개의 feature는 destJFK와 destLGA 이다.
+
+### 문제 7.2
+```{r}
+# test set의 data수 = 647개
+# bakward step wise로 선택된 31개의 feature가 포함된 모델로 confusion matrix 계산
+# test set에 대해서 실행
+q7prob_step = predict(q7bstep, newdata = fly_test, type = "response")
+q7pred_step = rep("ontime", 647)
+q7pred_step[q7prob_step > 0.5] <- "delayed"
+
+#컨퓨전 매트릭스 생성
+confusionMatrix(factor(q7pred_step), fly_test$delay, positive ="delayed")
+
+```
+
+**Backward stepwise selection 결과**
+
+|Accuracy|Sensitivity|Specificity|
+|:---:|:---:|:---:|
+|0.8516|0.25410|0.99048|
+
+## 문제 8
+### 문제 8.1
+```{r}
+
+#Lasso Regression을 위해 feature Matrix 생성
+q8trainX <- model.matrix(delay~., data = fly_train)[,-1]
+q8trainY <- fly_train$delay
+
+#Lasso Regression 실행, 10-fold CV 실행하기 (accuracy 기준으로)
+set.seed(100)
+q8lasso_class <- cv.glmnet(x=q8trainX, y=q8trainY, alpha = 1, family = "binomial",
+                  type.measure = "class", nfolds = 10)
+
+#Lasso Regression 결과 값 그려보기
+plot(q8lasso_class)
+
+
+#Lasso Regression 실행, 10-fold CV 실행하기 (AUC 기준으로)
+set.seed(100)
+q8lasso_auc <- cv.glmnet(x=q8trainX, y=q8trainY, alpha = 1, family = "binomial",
+                  type.measure = "auc", nfolds = 10)
+
+#Lasso Regression 결과 값 그려보기
+plot(q8lasso_auc)
+
+
+```
+Accuracy기준일 떄와 AUC기준일 떄 모두 33개에서 Error가 제일 낮거나 AUC가 제일 높았다.  
+하지만 크게 차이가 나지 않아 17개 정도의 변수를 선택해도 큰 무리가 없을듯 하다.  
+
+
+포함된 변수의 기준은 AUC기준으로 선택할 예정.  
+17개의 변수가 포함된 모델을 선택하자.  
+
+```{r}
+
+#nonzero 변수의 수 출력, 17개일 때 선택
+q8lasso_auc$nzero
+
+#performance measure 출력
+q8lasso_auc$cvm
+
+#lambda 출력
+q8lasso_auc$lambda
+
+# 변수가 17개일 떄의 lambda값 저장
+# Intercept를 고려해서 18개에 해당하는 값을 넣었다.
+q8lam <- q8lasso_auc$lambda[28]
+
+```
+Intercept를 포함하여 17개 변수가 선택되기 때문에  
+18개변수를 선택하는 lambda값을 지정하였다.
+
+
+그 결과 carrier중에서는 DL, MQ, OH, US 포함,  
+deptime중에서는 8, 10, 12, 14, 15, 18, 19, 20 포함,  
+origin 중에서는 DCA 포함,  
+weather 중에서는 1(안좋은 날씨) 포함  
+dayweek 중에서는 4, 6, 7 (목,토,일)이 포함되었다.  
+
+**포함된 Feature 정리**
+
+|Feature|세부 Feature (factor)|
+|:---:|:---|
+|carrier|Delta, American Eagle, Com air, US Airways|
+|deptime|8시, 10시, 12시, 14시, 15시, 18시, 19시, 20시|
+|weather|안 좋은 날씨|
+|dayweek|목요일, 토요일, 일요일|
+
+
+### 문제 8.2
+```{r}
+
+#test set에 대해 Delayed인지 여부를 예측
+q8pred_auc <- predict(q8lasso_auc, newx = model.matrix(delay~., data=fly_test)[,-1],
+                        s= q8lam, type = "class")
+
+#Confusion Matrix 실행
+confusionMatrix(factor(q8pred_auc, levels =c("ontime", "delayed")),
+                fly_test$delay, positive = "delayed")
+
+```
+**Lasso Regression 적용 결과**
+
+|Accuracy|Sensitivity|Specificity|
+|:---:|:---:|:---:|
+|0.8315|0.12295|0.99619|
+
+## 문제 9
+```{r}
+
+#6번 문제 모델의 ROC Curve 작성 식
+q6pred <- prediction(q63test_prob, fly_test$delay, c("ontime", "delayed"))
+q6perf <- performance(q6pred, measure = "tpr", x.measure = "fpr")
+
+#7번 문제 모델의 ROC Curve 작성 식
+q7pred <- prediction(q7prob_step, fly_test$delay, c("ontime", "delayed"))
+q7perf <- performance(q7pred, measure ="tpr", x.measure = "fpr")
+
+
+#8번 문제의 ROC Curve를 그리려면 확률을 예측한 결과로 그려야 한다.
+q8pred_prob <- predict(q8lasso_auc, newx = model.matrix(delay~., data=fly_test)[,-1],
+                        s= q8lam, type = "response")
+#8번 문제 모델의 ROC Curve 작성 식
+q8pred <- prediction(q8pred_prob, fly_test$delay, c("ontime", "delayed"))
+q8perf <- performance(q8pred, measure ="tpr", x.measure = "fpr")
+
+
+# 6, 7, 8번 에서 수립한 모델들에 대해 ROC Curve를 하나의 그래프로 시각화
+plot(q6perf, lwd=3) +
+plot(q7perf, col = "blue", lwd=3, add= TRUE) +
+plot(q8perf, col = "red", lwd=3, add= TRUE)
+```
+
+ㅡ 6번 Logistics Reg.에 대한 ROC Curve  
+<span style="color:blue">ㅡ</span> 7번backward stepwise selection 적용 Reg.에 대한 ROC Curve  
+<span style="color:red">ㅡ</span> 8번 Lasso Reg.에 대한 ROC Curve  
+
+```{r}
+#6번 문제 모델의 AUC 값 계산하기
+q6auc <- performance(q6pred, measure = "auc")
+q6auc@y.values
+
+#7번 문제 모델의 AUC 값 계산하기
+q7auc <- performance(q7pred, measure = "auc")
+q7auc@y.values
+
+#8번 문제 모델의 AUC 값 계산하기
+q8auc <- performance(q8pred, measure = "auc")
+q8auc@y.values
+```
+**6, 7, 8번 모델에 대한 AUC값 비교 표**
+
+|6번 Logistics|7번 Backward stepwise|8번 Lasso|
+|:---:|:---:|:---:|
+|0.7194536|0.7199688|0.7192428|
+
+AUC값은 대체적으로 비슷했지만 Backward stepwise selection Model이 0.7199688로 제일 높았다.
+
+##문제 10
+### 문제 10.1
+```{r}
+
+# numeric 변수가 없기 떄문에 normalize 없이 진행.
+#KNN 분석 - 5fold CV 5회 실행
+q10knn_cv <- train(data = fly_train, delay~., method ="knn",
+  trControl = trainControl(method = "repeatedcv", number=5, repeats=5),
+                           tuneGrid = expand.grid(k=seq(1,99,2)))
+
+q10knn_cv
+
+```
+
+best K값은 5이다.
+
+###문제 10.2
+```{r}
+# knn 후 Confusion Matrix 실행
+q10knn_pred <- predict(q10knn_cv, fly_test)
+confusionMatrix(q10knn_pred, fly_test$delay, positive = "delayed")
+
+```
+Knn에 대한 Confusion Matrix 및 다른 모델에 대한 결과 값을 아래 정리하였다.  
+
+**수립했던 모든 Model들에 대한 Performace비교**
+
+|Model|Accuracy|Sensitivity|Specificity|
+|:---:|:---:|:---:|:---:|
+|Baseline|0.8102|0|1|
+|Logistics Reg.|0.847|0.23770|0.98857|
+|Backward Stepwise Reg.|0.8516|0.25410|0.99048|
+|Lasso Reg.|0.8315|0.12295|0.99619|
+
+정확도가 제일 높은 모델은 Backward Selection Stepwise Regression 모델로 0.8516이다.  
+민감도가 제일 높은 모델도 Backward Selection Stepwise Regression 모델로 0.25410이다.
+
+
+따라서 7번에서 만든 Backward Selection Stepwise Regression모델로  
+분석을 수행하는 것이 바람직할 것이다.
+
+# 2. OJ Dataset
+## 문제 1
+### Linear Kernel SVM Model
+```{r}
+# OJ Dataset 확인하기
+str(OJ)
+
+# stratified samling은 caret패키지의 createDataPartition 사용
+# 7:3 비율로 Purchase 값이 고르게 분포되도록 Train, Test Set을 나눈다.
+set.seed(100)
+svmindex <- createDataPartition(OJ$Purchase, p = .7, list = FALSE)
+
+#train set과 test 셋 분할
+oj_train <- OJ[strindex,]
+oj_test <- OJ[-strindex,]
+
+#최적의 cost값을 찾기 위해 Parameter Tuning 실행
+# seq(-3, 3) 하면 경고가 뜨며 실행이 되지 않아 -2,2로 튜닝하였음.
+set.seed(100)
+lintune <- tune(svm, Purchase~., data = oj_train, kernel = "linear",
+                ranges = list(cost=10^seq(-2,2)))
+
+# Tuning 결과에서 Best cost 값 찾기
+summary(lintune)
+
+```
+
+cost = 0.01일 때 Best Model이며,  
+Best Model일 때 Error가 0.16으로 84%의 Accuracy를 보이는 것을 알 수있다.
+
+```{r}
+# Best 모델 추출하기
+lin_best <- lintune$best.model
+
+# test data에 대한 성능 평가하기, CH를 positive로 
+lin_pred <- predict(lin_best, oj_test)
+confusionMatrix(lin_pred, oj_test$Purchase, positive = "CH")
+
+```
+**Linear Kernel SVM 적용 결과**
+
+|Accuracy|Sensitivity|Specificity|
+|:---:|:---:|:---:|
+|0.8032|0.8610|0.7188|
+
+### RBF Kernel SVM Model
+```{r}
+
+#최적의 cost값을 찾기 위해 Parameter Tuning 실행
+set.seed(100)
+rbftune <- tune(svm, Purchase~., data = oj_train, kernel = "radial",
+                ranges = list(cost=c(0.01, 0.1, 1, 10, 100, 1000),
+                             gamma = c(0.01, 0.1, 1, 10, 100)))
+
+# Tuning 결과에서 Best cost 값 찾기
+summary(rbftune)
+
+```
+
+cost = 1, gamma = 0.01 일 때 Best Model이며,  
+Best Model일 때 Error가 0.17로 83%의 Accuracy를 보이는 것을 알 수있다.
+
+```{r}
+
+# Best 모델 추출하기
+rbf_best <- rbftune$best.model
+
+# test data에 대한 성능 평가하기, CH를 positive로 
+rbf_pred <- predict(rbf_best, oj_test)
+confusionMatrix(rbf_pred, oj_test$Purchase, positive = "CH")
+
+```
+**RBF Kernel SVM 적용 결과**
+
+|Accuracy|Sensitivity|Specificity|
+|:---:|:---:|:---:|
+|0.819|0.8663|0.7500|
+
+### Polynomial Kernel SVM Model
+```{r}
+
+#최적의 cost값을 찾기 위해 Parameter Tuning 실행
+set.seed(100)
+ptune <- tune(svm, Purchase~., data = oj_train, kernel = "polynomial",
+                ranges = list(cost=c(0.1, 1, 10, 100, 1000),
+                             degree = c(2,3,4,5)))
+
+# Tuning 결과에서 Best cost값 찾기
+summary(ptune)
+
+```
+
+cost = 10, degree = 2 일 때 Best Model이며,  
+Best Model일 때 Error가 0.177로 82.3%의 Accuracy를 보이는 것을 알 수있다.
+
+```{r}
+
+# Best 모델 추출하기
+p_best <- ptune$best.model
+
+# test data에 대한 성능 평가하기, CH를 positive로 
+p_pred <- predict(p_best, oj_test)
+
+#컨퓨전 매트릭스 생성
+confusionMatrix(p_pred, oj_test$Purchase, positive = "CH")
+
+```
+**Polynomial Kernel SVM 적용 결과**
+
+|Accuracy|Sensitivity|Specificity|
+|:---:|:---:|:---:|
+|0.7968|0.8770|0.6797|
+
+
+앞의 3개의 모델을 모두 한 표에 정리하면, 
+
+**SVM 3개 Model Performance 비교**
+
+|Model|Accuracy|Sensitivity|Specificity|
+|:---:|:---:|:---:|:---:|
+|Linear|0.8032|0.8610|0.7188|
+|RBF|0.819|0.8663|0.7500|
+|Polynomial|0.7968|0.8770|0.6797|
+
+Accruacy가 0.819로 제일 높은 RBF Kernel이 제일 좋은 성능을 보인다고 할 수 있다.  
+하지만 민감도는 0.8770으로 Polynomial Kernel이 제일 높았다.
+
+<u>끝</u>
+```
