@@ -1,0 +1,382 @@
+---
+title: "Assignment 5"
+author: "곽규원"
+date: "5/14/2021"
+output:
+  html_document: 
+    highlight: pygments
+  pdf_document: default
+---
+
+## Handwritten Digit Recoginition
+
+```{r }
+library(dslabs)
+library(ggplot2)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+```
+
+### 문제 1. Data preprocessing
+#### 1.A
+```{r }
+# mnist Dataset 읽어오기
+mnist <- dslabs::read_mnist("/Users/kwak/Desktop/mnist")
+
+# mnist Datset 확인하기
+str(mnist)
+```
+
+#### 1.B
+```{r }
+# feature 데이터 (image) 저장
+train_x <- mnist$train$images[1:2000,]
+
+# Target 데이터 (labels) 저장
+train_y <- mnist$train$labels[1:2000]
+
+# train_y의 분포 확인하기
+# train_y를 dataframe으로 변환
+train_y_df <-data.frame(train_y)
+
+#분포 확인해보기
+ggplot(train_y_df, aes(x=train_y)) + geom_bar()
+
+# 각각 개수 세보기
+train_y_num <- c()
+
+# 0~9의 각각 개수를 세어서 vector에 넣어준다.
+for (i in 0:9){
+  len <- length(which(train_y == i))
+  train_y_num <- c(train_y_num, len)
+}
+
+#0~9 각각 개수 확인하기
+train_y_num
+
+```
+
+0~9까지 191 220 198 191 214 180 200 224 172 210개의 숫자가 있었다.  
+8이 172개로 제일 조금 들어있었고, 7이 224개로 제일 많이 들어있었다.  
+이 둘의 차는 52 컸지만, 그래도 어느정도 고르게 들어가있었다.
+
+#### 1.C
+```{r }
+# R console에서 view(train_x)로 확인해보았을 땐 이미 column 이름이 V1, V2, V3로 지정되어있었다.
+
+# Column이름 V1, V2, V3,...,V784 순서대로 설정하기
+# colnuames 함수 확인해보기
+?colnames()
+
+# V와 숫자부분을 따로 만들어준다.
+v = rep("V", ncol(train_x))
+n = 1:ncol(train_x)
+
+# V와 숫자부분을 합쳐주며 colname 함수로 이름을 설정해준다.
+# 공백이 없어야 함으로 paste0 함수를 사용하였음
+colnames(train_x) <- paste0(v,n)
+
+```
+
+#### 1.D
+```{r }
+# nearZerovar 함수 확인해보기
+?nearZeroVar
+
+# column들 중 var이 0이거나 0에 가까운 것들의 index 저장
+nzv <- nearZeroVar(train_x)
+
+# index에 해당하는 coulmn 제외
+train_x <- train_x[,-nzv]
+
+# column에서 제외된 feature의 수
+length(nzv)
+
+```
+
+540개의 픽셀이 feature에서 제외됐다.
+
+#### 1.E
+```{r }
+
+# 합쳐주기 전에 train_x를 dataframe으로 만든다.
+train_x_df <- data.frame(train_x)
+
+# 두개 데이터프레임을 합쳐준다.
+train <- cbind(train_y_df, train_x_df)
+
+# 합쳐준 train dataframe 확인
+str(train)
+
+# Target featurels train_y의 colname을 Y로 바꿔주기
+colnames(train)[1] <- "Y"
+
+```
+
+#### 1.F
+```{r }
+
+# test_x, test_y에 앞 2000개만 각각 저장
+test_x <- mnist$test$images
+test_y <- mnist$test$labels
+
+# test set의 feature 분포 확인해보기
+ggplot(data.frame(test_y), aes(x=test_y)) + geom_bar()
+
+# test_y의 column이름을 V1, V2, ... 순서대로 설정하기.
+vt = rep("V", ncol(test_x))
+nt = 1:ncol(test_x)
+colnames(test_x) <- paste0(vt,nt)
+
+# D에서 제거한 feature을 test set에서도 제거하기
+test_x <- test_x[,-nzv]
+
+#test_x와 test_y를 합쳐주기
+test <- cbind(data.frame(test_y), data.frame(test_x))
+
+#feature의 column name을 Y로 바꿔주기
+colnames(test)[1] <- "Y"
+
+# 잘 만들어졌는지 확인하기
+str(test)
+```
+
+### 문제 2. 이미지 출력
+```{r }
+
+# test set의 첫 번째 데이터를 화면에 출력해주는 함수 실행해보기
+image(1:28, 1:28, matrix(mnist$test$images[1,], nrow=28)[ , 28:1], col =
+gray(seq(0, 1, 0.05)), xlab = "", ylab="")
+
+# 활용하여 test set의 행 번호를 입력받아 출력하는 함수 만들기
+# 코드 내 mnist$test$images[,] 부분의 행을 원하는 행 번호로 입력할 수 있게 한다.
+print_image <- function(x){
+  image(1:28, 1:28, matrix(mnist$test$images[x,], nrow=28)[ , 28:1], col =
+    gray(seq(0, 1, 0.05)), xlab = "", ylab="")
+}
+
+# 잘 작동하는지 확인해보기
+print_image(500)
+test$Y[500]
+
+print_image(1234)
+test$Y[1234]
+
+
+```
+
+**이미지로부터 실제 숫자값을 유추하기 어려운 예**
+```{r }
+# 출력해보기
+# 직접 찾을 떄는 seq 값을 바꿔가며 여러개를 동시에 출력해 보며 찾았다.
+for(i in seq(1400,1500,10)){
+  print_image(i)
+}
+
+print_image(1300)
+print_image(1340)
+print_image(1460)
+
+```
+1300번 째 값이 심하게 일그러져 5인지 바로 알기 어려웠다.  
+1340번 째 값도 한 눈에 구별하기 힘들었다.  
+1460번 째 값은 2로 추정되지만 구별이 잘 되지 않았다.  
+
+### 문제 3. Tree 만들기
+#### 3. A
+```{r }
+# a=0, minbucket = 50일 때 Tree 만들기
+# rpart 함수 확인하기 
+?rpart
+
+# Target이 0부터 9까지 범주를 가지기 때문에 Classification Tree로 진행
+set.seed(100)
+q3a_rt <- rpart(Y~., data = train, method = "class", 
+                control=list(cp=0, minbucket = 50))
+
+# 생성된 tree 시각화 해보기
+rpart.plot(q3a_rt, box.palette = "skyblue")
+
+# cross validation결과 시각화 해보기
+plotcp(q3a_rt)
+```
+Leaf 노드 수: 21개  
+Depth : 6  
+
+#### 3. B 
+```{r }
+
+# a=0, maxdepth = 3인 Tree 만들기
+set.seed(100)
+q3b_rt <- rpart(Y~., data = train, method = "class", control=list(cp=0, maxdepth = 3))
+
+# 생성된 tree 시각화 해보기
+rpart.plot(q3b_rt, box.palette = "skyblue")
+
+# cross validation결과 시각화 해보기
+plotcp(q3b_rt)
+
+```
+leaf 노드 수: 8개  
+만들어진 Tree는 실제 Classification에서 크게 활용될 수 없다.  
+보통 Tree 1개의 Tree 모델은 Training Data에 Overfitting되어 Variance가 매우 높게 나타나기 때문에  
+새로운 Data의 Classification에선 매우 높은 오류가 나타날 것이다.  
+  
+#### 3. C pruning 수행해보기
+```{r }
+# prunning을 쓰기 위해 기본 Tree하나를 만들기
+set.seed(100)
+q3c_rt <- rpart(Y~., data = train, method = "class", control=list(cp=0))
+
+# cv error(xerror)가 가장 작을 때의 cp값 얻기
+q3c_cp <- q3c_rt$cptable[which.min(q3c_rt$cptable[,"xerror"]), "CP"]
+
+# cv errorrk 가장 작을때의 cp값으로 prunning 실행
+
+q3c_rt_best <- prune(q3c_rt, cp = q3c_cp)
+
+# 생성된 pruned tree 시각화 해보기
+rpart.plot(q3c_rt_best)
+
+```
+rpart 함수는 자동으로 cross validation을 진행시켜준다.  
+Best a값을 가지는 prunning을 실행하였다.  
+
+#### 3. D test set에 대한 예측 수행
+```{r }
+# Confusion Matrix를 수행하기 위해 Target을 factor로 변환시켜준다.
+train$Y <- factor(train$Y)
+test$Y <- factor(test$Y)
+
+# 3.C에서 얻은 tree로 예측 수행
+q3d_pred <- predict(q3c_rt_best, newdata = test, type = "class")
+
+# test MAE 계산
+MAE(as.numeric(q3d_pred), as.numeric(test$Y))
+
+#Confusion Matrix 실행
+confusionMatrix(q3d_pred, test$Y)
+
+```
+
+예측 정확도는 0.7133정도로 71%의 정확도를 보였다.  
+pruning기법을 적용하였는데도 예측 정확도가 높지 않아 Bagging 및 Random forest 등 새로운 기법을 적용하여 예측 정확도를 높여야 Tree를 실제 예측에 쓸 수 있을 것으로 보인다.    
+
+### 4. Random Forest 만들기
+#### 4.A bagging model 만들기
+```{r }
+# randomForest 을 만들 때 mtry = p(feature 수)로 설정하면 Bagging 모델이 된다.
+# feature 수 = column의 수 -1 (Target feauture 제외)
+set.seed(100)
+q4a_bag <- randomForest(Y~., data = train, mtry = (ncol(train)-1) )
+
+# 시각화 해보기
+plot(q4a_bag)
+
+```
+
+모든 Class에서 Tree의 개수가 30개 정도일 때까지 OOB Error가 급격하게 감소하다가 100개 정도 이후에서는 큰 변화 없이 어느정도 유지되고 있다.  
+Class 간 OOB Error 차이의 범위 0.1 내로 어느정도 크게 나타나는 것으로 보인다.  
+
+#### 4.B Bagging Model로 Test set 예측 수행
+```{r }
+# Bagging model로 예측 수행
+q4b_pred <- predict(q4a_bag, newdata = test)
+
+#Confusion Matrix 실행
+confusionMatrix(q4b_pred, test$Y)
+```
+**3번과 Bagging 정확도 비교**
+
+|3번 Prune Model|Bagging Model|
+|:---:|:---:|
+|0.7133|0.8932|
+
+정확도의 차이는 무려 0.18 정도로 높은 수준으로 향상되었다.  
+전체적인 Sensitivity 값도 향상되어 예측 성능이 어느정도 좋은 모델이 되었다.  
+
+#### 4.C default 옵션 random forest 만들기
+```{r }
+# default 옵션으로 random forest model 생성
+# mtry값을 써주지 않으면 default 옵션으로 쉽게 생성할 수 있지만, 다른 방법을 시도해본다.
+# 소수점이 나올 확률이 높으므로 floor함수를 써서 소수점을 버려준다. (아래 설명 추가)
+set.seed(100)
+q4c_rf <- randomForest(Y~., data = train ,mtry = floor(sqrt((ncol(train)-1))) )
+
+# Bagging, random forest 모델 동시에 시각화
+# OOB classification error rate 변화 확인 가능
+# Error Rate만 나오게 하려면 Model 안의 err.rate 부분만 plot 그리기
+plot(q4a_bag, col = "blue") +
+plot(q4c_rf, col = "red", add=TRUE)
+
+```
+* Default 값으로 돌렸을 때는 Accuracy가 0.9128, mtry값에 직접 sqrt(p)를 적어주고 floor까지 적었을 때 (mtry = floor(sqrt((ncol(train)-1)))로 설정했을 때) Accuracy는 0.9131로 미세하게 높은 차이가 있었다. 따라서 floor를 적용하기 위해 mtry값을 위에 적은 것 처럼 설정해보았다.
+
+파란색이 Bagging Model, 빨간색이 Random Forest Model에 대한 OOB Error 변화이다.  
+두 Model 모두 Tree개수 30개 까지 Error가 급감하는 경향이 동시에 나타났다.  
+
+전체적으로 Random Forest Model의 OOB Error가 Bagging Model보다 더 낮게 나타났다.  
+따라서 Random Forest Model의 성능이 더 좋다는 것을 알 수 있다.  
+ 
+#### 4.D random forest로 예측 수행
+```{r }
+# test set에 대한 예측 수행
+q4d_pred <- predict(q4c_rf, newdata = test)
+
+# confusion Matrix 실행
+confusionMatrix(q4d_pred, test$Y)
+
+```
+
+**Bagging Model과 Random Forest Model 정확도 비교**
+
+|Bagging Model|Random Forest Model|
+|:---:|:---:|
+|0.8932|0.9131|
+
+Random Forest 실행 결과 Bagging만 한 Model보다 Accuracy가 약 2% 증가하였다.  
+
+#### 4.E 분류가 정확/어려운 숫자
+**분류가 가장 정확한 숫자**
+분류가 가장 정확한 숫자는 얼마나 실제 Positive를 잘 예측했는지에 대한 척도인 Sensitivity로 알 수 있다.  
+Sensitivity가 가장 높은 숫자는 1로, 0.9789로 나타났으며, Confusion Matrix를 살펴보았을 때도 24건 외에는 모두 알맞게 분류했다는 것을 알 수 있다.  
+
+**분류가 가장 어려운 숫자**
+같은 원리로 Sensitivity가 가장 낮은 숫자가 분류가 가장 어려운 숫자라고 할 수 있다.  
+Sensitivity가 가장 낮은 숫자는 8로, 0.8480로 나타났으며, Confusion Matrix를 살펴보았을 때 총 128건이나 잘 못 분류하였다.
+
+#### 4.F 눈으로 확인하기
+**잘 못 분류한 것 찾기**
+Predction Model에는 예측 결과가 Factor 형태로 저장되어있다.  
+실제 Target과 prediction Model의 값이 다른 것을 찾아야 한다.  
+그 중에서 Test Set의 Target에서의 값(실제 값)이 7이고, Prediction Model에서의 값이 1인 Index를 찾으면 된다.
+
+```{r }
+
+# test set의 값은 7, prediction Model의 값은 1인 Data 추출
+miss_7 <- subset(test, test$Y == 7 & q4d_pred == 1)
+
+# 출력하여 index 확인해보기
+miss_row <- as.numeric(rownames(miss_7))
+
+# 2번에서 만든 print 함수로 그림 그려보기
+print_image(552)
+print_image(1261)
+print_image(1501)
+print_image(1717)
+print_image(2064)
+print_image(3226)
+print_image(3581)
+print_image(3809)
+print_image(3839)
+print_image(3977)
+print_image(4298)
+print_image(4887)
+print_image(4967)
+
+```
+552, 2064, 3839, 4967 번은 1같지도, 7같지도 않았고,  
+1261, 1501, 3226, 3581, 4298, 4887 번은 어느정도 7 같았다.  
+하지만 1717, 3809, 3977 번은 7임에도 불구하고 1과 매우 비슷하였다.  
