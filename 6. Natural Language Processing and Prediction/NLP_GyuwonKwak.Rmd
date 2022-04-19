@@ -1,0 +1,790 @@
+---
+title: "6. Natural Language Processing and Prediction with ML Models"
+author: "Gyuwon Kwak"
+date: '2021 6 10 '
+output: html_document
+---
+## Sentiment Analysis on Twitter Dataset
+
+“Tweets.csv” 파일은 트위터에서 미국의 6개 항공사(American, Delta, SouthWest, United, US Airways,
+Virgin America)를 언급하는 tweet 14,640개에 대한 정보를 수집한 데이터셋으로, 본 과제에서는 다음 두 변수
+를 활용한다.
+  • airline_sentiment: “positive”, “negative”, “neutral”
+  • text: tweet 텍스트
+변수 airline_sentiment는 각 tweet 텍스트가 항공사에 대한 긍정적인 내용인지, 부정적인 내용인지, 중립적인
+내용인지에 따라 positive, negative, neutral로 분류한 결과를 나타낸다. 본 과제에서는 tweet 텍스트로부터
+positive/negative/neutral 여부를 판별하기 위한 모델을 만들어본다.
+
+```{r}
+# 필요 패키지 불러오기
+
+library(ggplot2)
+library(wordcloud)
+library(tm)
+library(SnowballC)
+library(caret)
+library(class)
+library(nnet)
+library(ROCR)
+library(glmnet)
+library(randomForest)
+library(e1071)
+library(dplyr)
+
+```
+
+```{r}
+#경로 설정
+setwd('D:\\Gyuwonfile\\수업 자료들\\2021-1\\데분활\\과제\\Assign 6')
+
+# 데이터 불러오기, 문자열을 factor로 변환하지 않는다.
+twt <- read.csv("Tweets.csv", stringsAsFactors = FALSE, encoding="UTF-8")
+
+# Twitter Dataset 확인해보기
+str(twt)
+```
+
+### 1. 데이터 특성 분석
+```{r}
+
+# 항공사에 대한 평가 내용 분포 확인하기
+ggplot(data = twt, aes(x= airline_sentiment)) + geom_bar()
+
+# Negative, Positive, Neutral 메시지 분리
+neg <- subset(twt, airline_sentiment == "negative")
+pos <- subset(twt, airline_sentiment == "positive")
+neu <- subset(twt, airline_sentiment == "neutral")
+
+# Negative한 평가의 트윗에 자주 포함되어있는 단어 확인해보기
+wordcloud(neg$text, max.words = 50, colors = brewer.pal(6, "Dark2"))
+# Neutral한 평가의 트윗에 자주 포함되어있는 단어 확인해보기 
+wordcloud(neu$text, max.words = 50, colors = brewer.pal(8, "Dark2"))
+# Positive한 평가의 트윗에 자주 포함되어있는 단어 확인해보기
+wordcloud(pos$text, max.words = 50, colors = brewer.pal(7, "Dark2"))
+```
+  
+14640개의 트윗 중 Negative한 평가를 가진 트윗이 9,400여개로 제일 많았으며, 중립적인 평가의 트윗은 약 2,900여개, 그리고 긍정적인 트윗은 2500여개로 제일 적었다.  
+**부정적인 평가를 가진 트윗에 대한 데이터가 많으므로, 추후 예측을 실행할 때 Negative한 Class를 제일 잘 예측할 것이라고 예상해볼 수 있다.**  
+  
+  
+빈도가 높게 나타난 단어들을 살펴보면, 전체적으로 united, american air, us airways 등 항공사를 지칭하는 단어가 제일 많았다. 사람들이 평가를 할 때 주로 특정 항공사를 언급하며 트윗 남긴다는 것을 알 수 있다.  
+Negative 평가에서는 delayed, cancelled, time, help 등이 많이 나타났고,  
+Neural 평가에서는 thank, need, just, tomorrow 등이 많이 나타났으며,  
+Positive 평가에서는 great, love, best, service, good 등이 많이 나타났다.  
+  
+**Negative한 평가에서는 주로 부정을한 이유, Positive 평가에서는 주로 칭찬에 대한 단어가 많이 분포한다는 특징을 알 수 있다.**
+  
+  
+### 2. Bag of words 기법 적용을 위한 Pre-processing
+#### 2.1 Corpus 생성
+```{r}
+
+# 평가 내용, 텍스트를 제외하고 다른 feauture를 제외한다.
+twt <- twt[,c(2,11)]
+
+# Target을 factor로 변환시켜준다.
+twt$airline_sentiment <- factor(twt$airline_sentiment)
+
+# corpus(말뭉치) 생성하기
+twtcor <- VCorpus(VectorSource(twt$text))
+
+# 생성된 말뭉치 확인해보기
+twtcor
+
+# 생성된 말뭉치의 구성요소들 살펴보기
+inspect(twtcor[[620]])
+twtcor[[620]]$content
+```
+  
+620번째 트윗은 53개의 문자(알파벳)을 포함하고 있었으며  
+United 항공이 늦게 출발한다는 내용의 트윗이었다.  
+
+#### 2.2 대소문자 통합, 모두 소문자로 변환
+```{r}
+# 대문자를 모두 소문자로 변환한다.
+# 이 때 tolower은 tm패키지 안에 속한 함수가 아니라 변환을 하여 넣는다.
+twtcor_pre <- tm_map(twtcor, content_transformer(tolower))
+
+# 모두 소문자로 잘 변환되어있는지 확인하기
+twtcor_pre[[620]]$content
+
+```
+  
+확인결과 S가 소문자로 잘 변환되었다.  
+
+#### 2.3 숫자 제거
+```{r}
+# 숫자를 제거한다.
+twtcor_pre <- tm_map(twtcor_pre, removeNumbers)
+
+# 숫자가 잘 제거되었는지 확인하기
+twtcor_pre[[620]]$content
+```
+  
+편명과 시간 등 숫자가 모두 제거되었다.
+
+#### 2.4 불용어 제거
+```{r}
+# 불용어 출력해보기
+stopwords()
+
+# 불용어 제거하기
+twtcor_pre <- tm_map(twtcor_pre, removeWords, stopwords())
+
+# 잘 제거되었는지 확인하기
+twtcor_pre[[620]]$content
+```
+  
+불용어인 to가 제거되었다.  
+
+#### 2.5 문장부호 제거
+```{r}
+# 문장부호 제거하기
+twtcor_pre <-tm_map(twtcor_pre, removePunctuation)
+
+# 잘 제거되었는지 확인해보기
+twtcor_pre[[620]]$content
+
+```
+  
+@와 : 등 문장부호가 잘 제거되었다.  
+
+#### 2.6 어간 추출
+```{r}
+# snowballC 패키지를 사용하여 stemming 하기
+twtcor_pre <- tm_map(twtcor_pre, stemDocument)
+
+# stemming 결과 확인하기
+twtcor_pre[[620]]$content
+```
+
+#### 2.7 공백 제거
+```{r}
+# preprocessing 과정 중 발생한 공백 제거
+twtcor_pre <- tm_map(twtcor_pre, stripWhitespace)
+
+# 공백 잘 제거됐는지 확인하기
+twtcor_pre[[620]]$content
+```
+
+### 3. Predictive model 만들기
+#### A. 지금까지 학습한 모델 활용
+  
+**모든 단어를 포함하는 모델을 만들면, 빈도가 적은 특정 단어에 모델이 Overfitting될 수 있는 단점이 존재한다.**  
+따라서 TF-IDF나 DTM을 활용하여 Feature Reduction을 적절히 수행한 모델을 먼저 만들어주자.  
+
+
+#### A.1 TF-IDF 모델 만들기
+```{r}
+# 단어의 출현 빈도 행렬(DTM)생성하기
+twt_dtm <- DocumentTermMatrix(twtcor_pre)
+
+# TF-IDF를 계산한 Matrix 만들기
+twt_tfidf <- weightTfIdf(twt_dtm)
+
+# 계속 확인한 620번 째 트윗의 tf-idf 확인해보기
+inspect(twt_tfidf[620,])
+
+# 전체 트윗 중 특정 퍼센트 미만의 트윗에서 발생하는 단어 제외
+twt_tfidf_rmv1 <- removeSparseTerms(twt_tfidf, 0.9975)
+twt_tfidf_rmv2 <- removeSparseTerms(twt_tfidf, 0.995)
+twt_tfidf_rmv3 <- removeSparseTerms(twt_tfidf, 0.99)
+
+twt_tfidf_rmv1
+twt_tfidf_rmv2
+twt_tfidf_rmv3
+```
+**TF-IDF 특정 %미만의 발생 단어 제외 시 남은 단어 수 비교**
+
+|모두 포함|0.25%미만 제외|0.5%미만 제외|1%미만 제외|
+|:---:|:---:|:---:|:---:|
+|11,272개|564개|330개|160개|
+
+  
+1%미만 발생하는 단어를 제외하면 단어의 수(feature)가 160개이므로 너무 적으면 Underfitting이 발생할 수 있다.  
+이미 11,272개에서 충분히 많이 줄어든 개수이므로, 330개 정도의 feature(단어)를 가지는 0.5%미만을 제외한 모델로 분석을 진행하고자 한다.  
+이 때 Sparsity는 98% 정도로 충분히 높았고, 다른 두 모델에 대해 가운데 값이었다.  
+**twt_tfidf_rmv2**라는 TF-IDF 모델을 최종적으로 선택하였다.  
+  
+#### A.2 Document Term Matrix 만들기 및 Feature Reduction
+```{r}
+# 특정 빈도 이상 발생하는 단어 추출해보기
+findFreqTerms(twt_dtm, lowfreq = 200)
+findFreqTerms(twt_dtm, lowfreq = 300)
+findFreqTerms(twt_dtm, lowfreq = 500)
+
+# 현재 단어 개수 확인하기
+twt_dtm
+
+# 전체 트윗 중 특정 퍼센트 미만의 트윗에서 발생하는 단어 제외
+twt_dtm_rmv1 <- removeSparseTerms(twt_dtm, 0.9975)
+twt_dtm_rmv2 <- removeSparseTerms(twt_dtm, 0.995)
+twt_dtm_rmv3 <- removeSparseTerms(twt_dtm, 0.99)
+
+twt_dtm_rmv1
+twt_dtm_rmv2
+twt_dtm_rmv3
+```
+**DTM 특정 %미만의 발생 단어 제외 시 남은 단어 수 비교**
+
+|모두 포함|0.25%미만 제외|0.5%미만 제외|1%미만 제외|
+|:---:|:---:|:---:|:---:|
+|11,272개|564개|330개|160개|
+
+같은 % 미만의 단어를 없앴을 때 남는 feature(단어)의 수는 같다는 것을 알 수 있다.  
+TF-IDF모델과 비교를 해주기 위해서 같은 0.5%미만 모델을 선택하자.  
+따라서 **twt_dtm_rmv2**이라는 DTM 모델을 최종적으로 선택하자.
+
+
+#### A.3 Pre-processing 및 Training/Test set 분리
+```{r}
+# 먼저 만든 TF-IDF 모델과 DTM 모델을 데이터프레임으로 변환.
+tw_tfidf <- as.data.frame(as.matrix(twt_tfidf_rmv2))
+tw_dtm <- data.frame(as.matrix(twt_dtm_rmv2))
+
+# feature의 이름 조정하기
+colnames(tw_tfidf) <- make.names(colnames(tw_tfidf))
+colnames(tw_dtm) <- make.names(colnames(tw_dtm))
+```
+  
+각 데이터프레임의 형태에 대한 확인은 수행하였으며, 많은 feature 수에 의해 보고서가 너무 길어질 것 같으므로 str(tw+tfidf)함수와 str(tw_dtm)함수는 코드에서 생략하였다.  
+
+```{r}
+# 첫 5000개의 데이터만 training set으로 사용, 나머지는 test set으로 사용
+tw_tfidf_train <- tw_tfidf[1:5000,]
+tw_tfidf_test <- tw_tfidf[5001:14640,]
+
+tw_dtm_train <- tw_dtm[1:5000,]
+tw_dtm_test <- tw_dtm[5001:14640,]
+
+# Confusion Matrix에 사용할 Test set의 feature만 따로 만들어주자.
+tw_test <- twt$airline_sentiment[5001:14640]
+
+```
+
+지금까지 K-nn, Linear Regression, Logistics Regression, Dicision Tree, Support Vector Machine 등의 Prediction Model을 학습하였다.  
+Target Feature가 Negative, Positive, Neutral의 세개 범주를 가지므로 Linear Regression 대신 Logistics Regression을 사용해야한다.  
+그 외에는 모두 사용할 수 있으므로 사용해보고자 한다.  
+Linear Regression을 제외한 4개 모델에 대해 각각 TF-IDF 모델과 DTM 모델의 결과를 모두 비교해볼 예정이다.  
+
+
+#### K-NN Model
+  
+Cross Validation을 활용하여 Best Model을 찾으려 하였으나, Feature의 수가 너무 많아 Fold수 등을 많이 줄여주었음에도 불구하고 코드가 끝나지 않았다. CV를 이용한 Cross Validation의 코드는 주석으로만 남겨둔다.  
+```{r}
+# Cross Validation을 위해 Training Dataset에 Target Feature를 포함시켜준다.
+tw_tfidf_trainf <- cbind(tw_tfidf_train, twt$airline_sentiment[1:5000])
+tw_dtm_trainf <- cbind(tw_dtm_train, twt$airline_sentiment[1:5000])
+
+# Target 이름 바꿔주기
+names(tw_tfidf_trainf)[331] <- c("sentiment")
+names(tw_dtm_trainf)[331] <- c("sentiment")
+
+# z-score normalization 사용
+#z_normal <- c("center", "scale")
+
+# 계산 시간을 고려해 3-fold cross Validation을 3회만 수행해주자.
+#set.seed(100)
+#knn_cv <- trainControl(method = "repeatedcv", number = 3, repeats = 3)
+
+# 파라미터 튜닝, k를 1부터 19까지 홀수 값에 대해서만 해준다.
+#knn_tune_grid <- expand.grid( mtry = seq(1, 9, 2))
+
+# 모델 Validation: TF-IDF 모델 
+#twt_knn <- train(data = tw_tfidf_trainf, sentiment~., mehtod = "knn",
+#                  trControl = knn_cv, preProcess = z_normal, tuneGrid = knn_tune_grid)
+
+# 모델 Validation: TF-IDF 모델 
+#twt_knn <- train(data = tw_dtm_trainf, sentiment~., mehtod = "knn",
+#                  trControl = knn_cv, preProcess = z_normal, tuneGrid = knn_tune_grid)
+
+```
+  
+**Cross Validation 대신에 다양한 K에 대해서만 검증하고, KNN을 실행해보고자 한다.**  
+  
+#### K-NN Model - TF-IDF 모델 Best K 찾기
+```{r}
+# Validation Set을 분할할 떄 stratified random split을 실행하여 Target이 비슷한 비율로 갈라지게 하자.
+# Train Set 70%, Validation Set 30%로 나눠준다.
+set.seed(100)
+strindex <- createDataPartition(tw_tfidf_trainf$sentiment, p = .7, list = FALSE)
+
+# train set과 Validation set 분할
+# knn 함수에서는 trian, Validation set에 Feature가 들어가지 않고 Feature만 있는 Label을 따로 만들어주기 때문에 feature를 제외하였다.
+knn_tfidf_train <- tw_tfidf_train[strindex,]
+knn_tfidf_vali <- tw_tfidf_train[-strindex,]
+
+# 라벨 설정 (Feature)
+knn_tfidf_train_labels <- tw_tfidf_trainf$sentiment[strindex]
+knn_tfidf_vali_labels <- tw_tfidf_trainf$sentiment[-strindex]
+
+# 각 결과에서 정확도, 민감도, 특이도 저장할 벡터 선언
+Acc <- c()
+Sens <- c()
+Spec <- c()
+
+# TF-IDF 모델: K를 1부터 9까지 2 간격으로 바꿔가며 knn 분석 진행.
+set.seed(100)
+for (i in seq(1,29,2)){
+  knn_confuM <- confusionMatrix( (knn(train = knn_tfidf_train, test = knn_tfidf_vali, 
+                        cl = knn_tfidf_train_labels, k = i)), knn_tfidf_vali_labels)
+  
+  # Confusion Matrix 중에서 정확도, 민감도, 특이도를 따로 모아준다.
+  Acc <- c(Acc, knn_confuM$overall[1])
+  Sens <- c(Sens, knn_confuM$byClass[1])
+  Spec <- c(Spec, knn_confuM$byClass[2])
+}
+
+# 정확도의 최대값 추출
+max(Acc)
+
+# 정확도가 최대일 때 값
+which.max(Acc)
+
+```
+  
+TF-IDF 모델의 Validation 결과 K=17일 때 정확도 61.97%정도의 모델이 최적의 K값을 가진 제일 좋은 모델이란 것을 알 수 있었다.  
+  
+#### K-NN Model - DTM 모델 Best K 찾기
+```{r}
+# TF-IDF와 같은 과정을 한 번 더 거쳐주자.
+# Train Set 70%, Validation Set 30%로 나눠준다.
+set.seed(100)
+strindex2 <- createDataPartition(tw_dtm_trainf$sentiment, p = .7, list = FALSE)
+
+# train set과 Validation set 분할
+# knn 함수에서는 trian, Validation set에 Feature가 들어가지 않고 Feature만 있는 Label을 따로 만들어주기 때문에 feature를 제외하였다.
+knn_dtm_train <- tw_dtm_train[strindex2,]
+knn_dtm_vali <- tw_dtm_train[-strindex2,]
+
+# 라벨 설정 (Feature)
+knn_dtm_train_labels <- tw_dtm_trainf$sentiment[strindex2]
+knn_dtm_vali_labels <- tw_dtm_trainf$sentiment[-strindex2]
+
+# 각 결과값을 저장할 벡터 초기화
+Acc2 <- c()
+Sens2 <- c()
+Spec2 <- c()
+
+# DTM 모델: K를 1부터 9까지 2 간격으로 바꿔가며 knn 분석 진행.
+set.seed(100)
+for (i in seq(1,29,2)){
+  knn_confuM <- confusionMatrix( (knn(train = knn_dtm_train, test = knn_dtm_vali, 
+                        cl = knn_dtm_train_labels, k = i)), knn_dtm_vali_labels)
+  
+  # Confusion Matrix 중에서 정확도, 민감도, 특이도를 따로 모아준다.
+  Acc2 <- c(Acc2, knn_confuM$overall[1])
+  Sens2 <- c(Sens2, knn_confuM$byClass[1])
+  Spec2 <- c(Spec2, knn_confuM$byClass[2])
+}
+
+# 정확도의 최대값 추출
+max(Acc2)
+
+# 정확도가 최대일 때 값
+which.max(Acc2)
+
+```
+
+DTM 모델의 Validation 결과 K=15일 때 정확도 64.38%정도의 모델이 최적의 K값을 가진 제일 좋은 모델이란 것을 알 수 있었다.  
+  
+#### K-NN Model Test set에 적용시켜보기
+```{r}
+# K=17을 가지는 최적의 TF-IDF KNN모델 만들기
+knn_tfidf_pred <- knn(train = knn_tfidf_train, test = tw_tfidf_test, 
+                        cl = knn_tfidf_train_labels, k = 17)
+
+# Confusion Matrix 출력
+confusionMatrix(knn_tfidf_pred, tw_test)
+
+```
+
+```{r}
+# K=15을 가지는 최적의 DTM KNN모델 만들기
+knn_dtm_pred <- knn(train = knn_dtm_train, test = tw_dtm_test, 
+                        cl = knn_dtm_train_labels, k = 15)
+
+# Confusion Matrix 출력
+confusionMatrix(knn_dtm_pred, tw_test) 
+
+```
+**KNN 분석 결과 정리**
+
+||정확도|민감도|특이도|
+|:---:|:---:|:---:|:---:|
+|TF-IDF 모델|0.4967|0.5344/0.6028/0.20968|0.6498/0.5354/0.99209|
+|DTM 모델|0.3924|0.2062/0.9035/0.44581|0.9641/0.2931/0.95587|
+
+  
+KNN 실행 결과 TF-IDF 모델의 정확도는 49.67%정도로 정확도가 39.24%인 DTM 모델보다 10%가량 높았다.  
+하지만 둘다 정확도가 낮으므로 실제 예측에 쓰기엔 적합하지 않아 보인다.  
+Feature의 수가 많고 희소행렬이기 때문에 KNN 분석은 사실 적합하지 않았다고 생각한다.  
+  
+  
+#### Logistics Regression Model
+  
+수업시간에 배웠던 Logistics Regression은 Target이 Binomial일 때만 사용할 수 있다.  
+따라서 과제의 Target이 3개 이기 때문에 사용할 수 없다.  
+Mutiple Logistics Regression은 직접 구글링하여 수행하였다.  
+  
+```{r}
+# mnn 패키지의 multinom 함수를 통해 Multiple Logistics Regression 수행
+# 모든 변수에 대해 실행하였다.
+mlr_tfidf <- multinom(sentiment~., data = tw_tfidf_trainf)
+```
+  
+**좋은 모델을 위한 Strategy 결정**  
+정확도와 해석력 높은 모델을 만들기 위해서는 Subset selection, Regularization, PCR등을 수행할 수 있다.  
+먼저 Text모델의 특성상 Sparse Matrix를 다루므로 강하게 작용하는 주성분은 없을 것으로 예상되어 PCR은 제외하였다.  
+Subset Selection은 실행시켜보았는데, 계산 시간이 너무 오래걸려 수행하지 못하였다.  
+Regularization 기법 중 Feature Reduction의 효과를 볼 수 있는 **Lasso Regression**을 사용하여 분석하였다.  
+  
+  
+#### TF-IDF Model의 Logistics Regression
+```{r}
+# Backward stepwise Selection은 계산 시간이 너무 오래걸려 수행하지 못하였다.
+# mlr_tfidf_step <- step(mlr_tfidf, direction="backward")
+
+# Lasso Regression을 통해 Regularization을 진행한다.
+# Feature Matrix 생성
+trainX_tfidf <- model.matrix(sentiment~., data= tw_tfidf_trainf)[,-331]
+trainY_tfidf <- tw_tfidf_trainf$sentiment
+
+# Lasso Regression 수행
+set.seed(100)
+mlr_tfidf_las <- glmnet(x=trainX_tfidf, y= trainY_tfidf, alpha=1, family = "multinomial")
+plot(mlr_tfidf_las, xvar="lambda", label=TRUE)
+
+# lambda 값에 대한 Cross calidation 수행
+# multinomial Model에 대해서는 auc로 분석할 수 없다는 경고가 나와 Accuracy를 기준으로 수행하였다.
+set.seed(100)
+mlr_tfidf_las_cv <- cv.glmnet(x=trainX_tfidf, y= trainY_tfidf, alpha=1, 
+                              family = "multinomial", type.measure = "class", nfolds=5)
+
+plot(mlr_tfidf_las_cv)
+```
+  
+Miss classification Error가 계속 비교적 낮은 값을 보이다 갑자기 올라가는 구간은 Feature가 약 90개일 때였다.  
+따라서 90~123개 정도의 변수를 가졌을 때 Error를 보고 변수의 수를 선택하도록 하자.  
+  
+```{r}
+#nonzero 변수의 수 출력
+mlr_tfidf_las_cv$nzero
+
+#miss classification Error 출력
+mlr_tfidf_las_cv$cvm
+
+```
+  
+nonzero 변수의 수를 출력하여 봤을 때 feature가 90개~123개 사이일 때는 33~39번 째 값이 있었다.  
+그리고 Miss classification Error를 봤을 때 38번 째값이 Error가 0.2666로 제일 작았다.  
+이떄 Feature의 개수는 118개였다. 
+  
+```{r}
+# 변수의 개수가 118개일 때 lambda 값 저장
+lambda_tfidf <- mlr_tfidf_las_cv$lambda[38]
+
+# 어떤 Feature가 포함되었는지 출력은 보고서가 너무 길어지기 때문에 출력만 해보고 주석처리 하였다.
+# coef(mlr_tfidf_las_cv, s= lambda_tfidf)
+
+
+# Prediction을 위해 Test Dataset에 Target Feature를 포함시켜준다.
+tw_tfidf_testf <- cbind(tw_tfidf_test, twt$airline_sentiment[5001:14640])
+tw_dtm_testf <- cbind(tw_dtm_test, twt$airline_sentiment[5001:14640])
+# Target 이름 바꿔주기
+names(tw_tfidf_testf)[331] <- c("sentiment")
+names(tw_dtm_testf)[331] <- c("sentiment")
+
+
+# test set에 대해 예측
+mlr_tfidf_pred <- predict(mlr_tfidf_las_cv, newx = model.matrix(sentiment~., data= tw_tfidf_testf)[,-331],
+                          s= lambda_tfidf, type = "class")
+
+# Confusion Matrix 출력
+confusionMatrix(factor(mlr_tfidf_pred, levels = c("positive", "negative", "neutral")), tw_test)
+```
+  
+TF-IDF Model은 Test set에 대하여 예측 결과 정확도 72.58%, 민감도는 각각 92.51%, 26.69%, 55.29%이고, 특이도는 48.30%, 95.03%, 94.96%이다.  
+Negative한 평가에 대해서는 잘 분류하는 것으로 보이지만 Neutral한 평가(민감도 26.69%)와 positive한 평가(민감도 55.29%)에 대해서는 잘 예측하지 못한 것을 알 수 있다.  
+  
+  
+#### DTM Model의 Logistics Regression
+```{r}
+# Lasso Regression을 통해 Regularization을 진행한다.
+# Feature Matrix 생성
+trainX_dtm <- model.matrix(sentiment~., data= tw_dtm_trainf)[,-331]
+trainY_dtm <- tw_dtm_trainf$sentiment
+
+# Lasso Regression 수행
+set.seed(100)
+mlr_dtm_las <- glmnet(x=trainX_dtm, y= trainY_dtm, alpha=1, family = "multinomial")
+plot(mlr_dtm_las, xvar="lambda", label=TRUE)
+
+# lambda 값에 대한 Cross calidation 수행
+set.seed(100)
+mlr_dtm_las_cv <- cv.glmnet(x=trainX_dtm, y= trainY_dtm, alpha=1, 
+                              family = "multinomial", type.measure = "class", nfolds=5)
+
+plot(mlr_dtm_las_cv)
+```
+  
+Miss classification Error가 계속 비교적 낮은 값을 보이다 갑자기 올라가는 구간은 Feature가 약 70개일 때였다.  
+따라서 70~104개 정도의 변수를 가졌을 때 Error를 보고 변수의 수를 선택하도록 하자.  
+  
+```{r}
+#nonzero 변수의 수 출력
+mlr_dtm_las_cv$nzero
+
+#miss classification Error 출력
+mlr_dtm_las_cv$cvm
+
+```
+  
+nonzero 변수의 수를 출력하여 봤을 때 feature가 90개~123개 사이일 때는 33~39번 째 값이 있었다.  
+그리고 Miss classification Error를 봤을 때 39번 째값이 Error가 0.2632로 제일 작았다.  
+이떄 Feature의 개수는 104개였다. 
+  
+```{r}
+# 변수의 개수가 104개일 때 lambda 값 저장
+lambda_dtm <- mlr_dtm_las_cv$lambda[39]
+
+# 어떤 Feature가 포함되었는지 출력은 보고서가 너무 길어지기 때문에 출력만 해보고 주석처리 하였다.
+# coef(mlr_dtm_las_cv, s= lambda_dtm)
+
+# test set에 대해 예측
+mlr_dtm_pred <- predict(mlr_dtm_las_cv, newx = model.matrix(sentiment~., data= tw_dtm_testf)[,-331],
+                          s= lambda_dtm, type = "class")
+
+# Confusion Matrix 출력
+confusionMatrix(factor(mlr_dtm_pred, levels = c("positive", "negative", "neutral")), tw_test)
+```
+  
+DTM Model은 Test set에 대하여 예측 결과 정확도 70.85%, 민감도는 각각 78.39%, 54.36%, 63.16%이고, 특이도는 71.99%, 83.88%, 92.84%이다.  
+Negative한 평가에 대해서는 적당히 분류하며(민감도 78.39%) Neutral한 평가(민감도 54.36%)는 여전히 잘 분류하지 못하고 있다.  
+특정한 Feature가 아니라고 예측하는 정도의 비율인 특이도는 전체적으로 높게 나타났다.  
+  
+  
+**Logistic Regression 분석 결과 정리**
+
+||정확도|민감도|특이도|
+|:---:|:---:|:---:|:---:|
+|TF-IDF 모델|0.7258|0.9251 / 0.26690 / 0.5529|0.4830 / 0.95025 / 0.9496|
+|DTM 모델|0.7085|0.7839 / 0.5436 / 0.6316|0.7199 / 0.8388 / 0.9284|
+
+정확도 측면에서는 TF-IDF 모델이 72.58%로 DTM 모델보다 약 2% 높은 것으로 나타났다.  
+하지만 Netural한 평가를 Neutral이라고(민감도 측면) 예측하는 측면과 Negative가 아닌 것을 Negative가 아니라고(특이도 측면) 예측하는 측면에서는 TF-IDF 모델이 DTM보다 성능이 훨씬 떨어졌다.  
+따라서 정확도가 약간 떨어지더라도 전체적으로 보았을 떄 DTM 모델을 선택하는 것도 괜찮아 보인다.  
+  
+  
+ROC Curve를 이용하여 두 모델의 성능을 비교하고자 하였으나 Multinomial일 때는 ROC Curve를 그릴 수 없다는 경고가 나와 그릴 수 없었다.  
+나왔던 경고: <span style="color:red">Error in prediction(mlr_tfidf_prob, tw_test) : Number of classes is not equal to 2. ROCR currently supports only evaluation of binary classification tasks.</span>  
+  
+  
+#### Classification Tree Model
+  
+Tree 모델은 그냥 만들면 Training Data에 Overfitting되기 때문에 Variance가 매우 높게 나타나는 경향이 있다.  
+정확도가 높은 Model을 만들기 위해 많은 Tree를 생성하여 평균을 이용하는 Bagging 기법과 Tree의 Node를 분할할 때 랜덤으로 Feature를 선택하게 해주는 Random Forest을 적용해줄 것이다.  
+보통의 경우 Bagging만 적용하는 것보다 Random Forest를 적용하는 것이 OOB MSE가 더 낮다는 것을 배웠음으로, 굳이 두 모델의 OOB MSE 값을 비교하거나 그러진 않겠다.  
+  
+#### TF-IDF Model의 Classification Tree
+```{r}
+# Traning set에 Bagging 및 Random Forest를 적용하기.
+# mtry = floor(p/3) 으로 넣으면 Random Forest를 적용하는 것과 같다.
+set.seed(100)
+tree_tfidf <- randomForest(sentiment~., data = tw_tfidf_trainf, ntree=300, mtry = 110)
+
+# Tree의 개수에 따른 out of bag MSE 시각화
+plot(tree_tfidf)
+```
+  
+for문을 이용하여 mtry값을 바꿔주며 OOB Error를 최소화하는 mtry의 값을 찾을 수 있지만, 계산이 너무 오래걸려 수행하지 못하였다. 따라서 Random Forest만 적용해주도록 하자.  
+Tree가 약 10개정도 일 때 까지는 OOB Error가 급격히 감소하다가 그 이후에는 완만하게 감소하였다.  
+  
+```{r}
+# TF-IDF 모델에 대한 Test set에 대해 Class 예측
+tree_tfidf_pred <- predict(tree_tfidf, newdata = tw_tfidf_testf, type="class")
+
+# Confusion Matrix 출력
+confusionMatrix(tree_tfidf_pred, tw_test)
+```
+  
+TF-IDF에 대한 Random Forest Model의 결과는 정확도 63.71%, 민감도는 각각 65.13%, 58.77$, 64.71%였으며, 특이도는 77.70%, 74.57%, 90.54%였다.  
+정확도가 높지 않았으며, 민감도나 특이도도 그렇게 좋은 모델은 아니었다. Postive가 아닌 것만 아니라고 잘 분류하였다.  
+  
+  
+#### DTM Model의 Classification Tree
+```{r}
+# Traning set에 Bagging 및 Random Forest를 적용하기.
+set.seed(100)
+tree_dtm <- randomForest(sentiment~., data = tw_dtm_trainf, ntree=300, mtry = 110)
+
+# Tree의 개수에 따른 out of bag MSE 시각화
+plot(tree_dtm)
+```
+  
+Tree가 약 25개정도 일 때 까지는 OOB Error가 급격히 감소하다가 그 이후에는 완만하게 감소하였다.  
+  
+```{r}
+# DTM 모델에 대한 Test set에 대해 Class 예측
+tree_dtm_pred <- predict(tree_dtm, newdata = tw_dtm_testf, type="class")
+
+# Confusion Matrix 출력
+confusionMatrix(tree_dtm_pred, tw_test)
+```
+  
+TF-IDF에 대한 Random Forest Model의 결과는 정확도 68.05%, 민감도는 각각 71.64%, 60.14$, 64.45%였으며, 특이도는 77.28%, 79.39%, 91.37%였다.  
+정확도가 그리 높지 않았으며, Postive가 아닌 것만 아니라고 잘 분류하였다.  
+
+
+**Tree(Random Forest) Model 분석 결과 정리**
+
+||정확도|민감도|특이도|
+|:---:|:---:|:---:|:---:|
+|TF-IDF 모델|0.6371|0.6513 / 0.5877 / 0.6471|0.7770 / 0.7457 / 0.9054|
+|DTM 모델|0.6805|0.7164 / 0.6014 / 0.6445|0.7728 / 0.7939 / 0.9137|
+
+  
+정확도는 DTM Model이 68.05%로 정확도가 63.71%인 TF-IDF Model보다 약 4%정도 높은 것을 알 수 있었다.  
+전체적인 민감도와 특이도를 보았을 때도 DTM Model이 전체적으로 높으므로 Random Forest Model에서는 DTM Model을 선택하는 것이 합리적이다.  
+  
+  
+#### Support Vector Machine(SVM) Model
+  
+현재 가지고있는 Twt 데이터셋은 feature의 개수 p=303에 비해 training Data의 수 n= 5000에 비해 크기 떄문에 굳이 Linear Kernel을 fitting할 필요가 없다.  
+보통 feature 수와 데이터의 수를 따져 Linear혹은 RBF Kernel을 사용하고, 대부분의 경우 RBF Kernel의 성능이 Polynomial Kernel의 성능보다 좋으므로 RBF Kernel에만 피팅을 할 것이다.  
+e1071 패키지의 svm 함수를 사용하므로 one-versus-one classification을 적용하여 모든 class 쌍에 대해서 SVM 모델을 피팅한다.  
+  
+  
+#### TF-IDF Model의 RBF Kernel SVM Model
+```{r}
+# RBF Kernel 사용시 gamma와 cost 두 파라미터에 대해 tuning을 하려 하였으나, ranges 값을 줄여도 계산 시간이 너무 오래 걸려 수행하지 못 하였다. 직접 바꿔가며 하기에도 SVM 함수의 실행해도 시간이 너무 오래 걸렸다.
+# gamma와 cost를 1로 설정하여 RBF Kernel에 fitting 하였다.
+svm_tfidf <- svm(sentiment~.,data = tw_tfidf_trainf, kernel = "radial",
+                 gamma = 1, cost = 1)
+
+# SVM 결과 살펴보기.
+summary(svm_tfidf)
+
+# Tuning 결과 시각화해보기 한 번에 2개 까지만 나타낼 수 있다.
+plot(svm_tfidf, data = tw_tfidf_trainf, amp~anoth)
+
+# Test set에 적용해보기
+svm_tfidf_pred <- predict(svm_tfidf, newdata = tw_tfidf_testf)
+
+# confusion Matrix 출력
+confusionMatrix(svm_tfidf_pred, tw_test)
+
+```
+  
+TF-IDF에 대한 RBF Kernel SVM의 결과는 정확도 68.98%, 민감도는 각각 97.49%, 13.51%, 30.83%였으며, 특이도는 24.58%, 97.92%, 98.48%였다.  
+정확도가 그리 높지 않았으며, Neutral과 positive인 것을 Neutral과 positive하다고 예측한 것(민감도)과 negative가 아닌 것을 negitive가 아니라고 예측한 것(특이도)에서 형편 없었다.  
+하지만 그 반대는 극적으로 잘 분류하는 것을 볼 수 있었다.  
+  
+  
+#### DTM Model의 RBF Kernel SVM Model
+```{r}
+# gamma와 cost를 1로 설정하여 RBF Kernel에 fitting 하였다.
+svm_dtm <- svm(sentiment~.,data = tw_dtm_trainf, kernel = "radial",
+                 gamma = 1, cost = 1)
+
+# SVM 결과 살펴보기.
+summary(svm_dtm)
+
+# Tuning 결과 시각화해보기 한 번에 2개 까지만 나타낼 수 있다.
+plot(svm_dtm, data = tw_tfidf_trainf, amp~anoth)
+
+# Test set에 적용해보기
+svm_dtm_pred <- predict(svm_dtm, newdata = tw_dtm_testf)
+
+# confusion Matrix 출력
+confusionMatrix(svm_dtm_pred, tw_test)
+
+
+```
+  
+DTM에 대한 RBF Kernel SVM의 결과는 정확도 65.23%, 민감도는 각각 98.25%, 9.69%, 9.54%였으며, 특이도는 11.92%, 97.84%, 99.70%였다.  
+DTM 모델도 TF-IDF 모델과 같이 Neutral과 positive인 것을 Neutral과 positive하다고 예측한 것(민감도)과 negative가 아닌 것을 negitive가 아니라고 예측한 것(특이도)에서 형편 없었다.  
+하지만 그 반대는 극적으로 잘 분류하는 것을 볼 수 있었다.  
+  
+  
+**SVM RBF Kernel Model 분석 결과 정리**
+
+||정확도|민감도|특이도|
+|:---:|:---:|:---:|:---:|
+|TF-IDF 모델|0.6898|0.9749 / 0.13516 / 0.30839|0.2458 / 0.97921 / 0.98480|
+|DTM 모델|0.6523|0.9825 / 0.09696 / 0.09548|0.1192 / 0.97842 / 0.99703|
+
+  
+정확도는 TF-IDF 모델이 68.98%로 정확도가 65.23%인 DTM 모델에 비해 약 4% 높았다.  
+하지만 두 모델 모두 Neutral과 positive인 것을 Neutral과 positive하다고 예측한 것(민감도)과 negative가 아닌 것을 negitive가 아니라고 예측한 것에 대해서는 형편없는 성능을 보여주었고, negative인 것을 negative 하다고 예측한 것과 netural이 아닌 것과 positive가 아닌 것을 각각 아니라고 예측한 것에 대해서는 매우 높은 성능을 보였다.  
+정확도가 매우 높지도 않고 무엇보다, 앞서 말한 특성 때문에 실 예측에 쓰기에 적합해 보이진 않는다.  
+**다만 기술적 문제로 Parameter Tuning을 수행하지 않았음에도 불구하고 정확도가 나쁘지 않았다. Parameter Tuning을 수행한 모델로 했다면 높은 정확도가 나왔을 가능성도 충분해보인다.**
+  
+  
+#### B. 최종 모델 선택하기 
+  
+  
+**전체 Model 들에 대한 Accracy 정리**
+
+||K-NN|Logistic Reg.|Classfication Tree|SVM|
+|:---:|:---:|:---:|:---:|:---:|
+|TF-IDF 모델|0.4967|0.7258|0.6371|0.6898|
+|DTM 모델|0.3924|0.7085|0.6805|0.6523|
+
+  
+전체적으로 정확도가 높은 Logistic Regression Model 중에서도 TF-IDF 값을 기준으로 만든 Model이 가장 높은 정확도를 보였다.  
+  
+  
+**Logistic Regression 분석 결과 정리**
+
+||정확도|민감도|특이도|
+|:---:|:---:|:---:|:---:|
+|TF-IDF 모델|0.7258|0.9251 / 0.26690 / 0.5529|0.4830 / 0.95025 / 0.9496|
+|DTM 모델|0.7085|0.7839 / 0.5436 / 0.6316|0.7199 / 0.8388 / 0.9284|
+
+하지만 앞서 말했듯이 민감도와 특이도 측면에서 보았을 때는 TF-IDF 모델이 DTM보다 성능이 훨씬 떨어졌다.  
+정확도는 2%밖에 차이나지 않으므로, **Logistic Regression Model의 DTM Model을 최종 선택한다.**  
+  
+  
+#### C. 어떤 class를 분류하기 어려운가?
+앞서 분석한 모든 모델에 대해 민감도와 특이도를 정리해보았다. 분류하기 어려운 것을 찾기 위해 민감도를 집중적으로 분석해보자.  
+
+**Summary of Sensitivity**
+
+||Negative|Neutral|Positive|
+|:---:|:---:|:---:|:---:|
+|KNN TF-IDF|0.5344|0.6028|0.20968|
+|KNN DTM|0.2062|0.9035|0.44581|
+|Logistic Reg. TF-IDF|0.9251|0.26690|0.5529|
+|Logistic Reg. DTM|0.7839|0.5436|0.6316|
+|Tree TF-IDF|0.6513|0.5877|0.6471|
+|Tree DTM|0.7164|0.6014|0.6445|
+|SVM TF-IDF|0.9749|0.13516|0.30839|
+|SVM DTM|0.9825|0.09696|0.09548|
+|평균|0.7218|0.4673|0.4419|
+
+  
+각 모델들의 민감도를 살펴보았을 때 평균이 제일 낮은 Class는 Positive 였고, 약 2%차이로 Neutral도 비슷하게 낮게 나타났다.  
+따라서 Neutral과 Positive한 트윗(텍스트)들을 실제로 맞게 예측을 잘 하지 못하였다. 
+  
+  
+**Summary of Specificity**
+
+||Negative|Neutral|Positive|
+|:---:|:---:|:---:|:---:|
+|KNN TF-IDF|0.6498|0.5354|0.99209|
+|KNN DTM|0.9641|0.2931|0.95587|
+|Logistic Reg. TF-IDF|0.4830|0.95025|0.9496|
+|Logistic Reg. DTM|0.7199|0.8388|0.9284|
+|Tree TF-IDF|0.7770|0.7457|0.9054|
+|Tree DTM|0.7728|0.7939|0.9137|
+|SVM TF-IDF|0.2458|0.97921|0.98480|
+|SVM DTM|0.1192|0.97842|0.99703|
+|평균|0.5915|0.7643|0.9534|
+
+  
+각 모델들의 특이도를 살펴보았을 때 평균이 제일 낮은 Class는 Negative였다.  
+따라서 Negative가 아닌 것을 Negative가 아니라고 예측하는 성능이 제일 낮았지만, 59.15%정도로 앞서 살펴본 민감도에 비하면 비교적 높은 편이었다.  
+**민감도와 특이도를 종합적으로 살펴보았을 때 Neutral한 Class제일 분류하기 힘들었다고 할 수 있다.**  
+
+-끝-
