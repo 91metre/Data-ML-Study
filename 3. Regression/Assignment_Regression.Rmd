@@ -1,0 +1,529 @@
+---
+title: "3. Regression"
+author: "Gyuwon Kwak"
+date: '2021 4 21 '
+output: html_document
+---
+
+# Climate Change
+## 라이브러리, 파일 읽기
+```{r}
+library(ggplot2)
+library(GGally)
+library(psych)
+library(leaps)
+library(caret)
+library(glmnet)
+
+clichan <- read.csv("ClimateChange.csv")
+
+```
+
+## 문제 1
+```{r}
+#데이터 프레임 파악하기
+str(clichan)
+
+#Target 변수인 Temp 변수의 분포 확인하기
+ggplot(data = clichan, aes(x=Temp) ) + geom_histogram(color = "blue", fill = "white")
+
+# 각 변수들과의 관계를 한 눈에 확인하기
+ggpairs(clichan[c("MEI", "CO2", "CH4", "N2O", "CFC.11", "CFC.12",
+                  "TSI", "Aerosols","Temp")])
+
+pairs.panels(clichan[c("MEI", "CO2", "CH4", "N2O", "CFC.11", "CFC.12",
+                  "TSI", "Aerosols","Temp")])
+
+
+```
+#### Target Var 분포
+Target variable은 대체적으로 0.00 ~ 0.50 사이에서 많이 나타났다.
+
+#### 각 변수들의 상관관계
+상관계수가 높게 나타나면 그만큼 상관관계가 강하다는 뜻이다.
+상관계수가 높게 나타나는 두 변수는,
+
+CO2 변수와 CH4, N2O, CFC.12, Temp 변수
+CH4 변수와 N2O, CFC.11, CFC.12, Temp 변수
+N2O 변수와 CFC.12, Temp 변수
+CFC.11 변수와 CFC.12 변수
+CFC12 변수와 0.69 변수 등이 있다.
+따라서 이 변수들 사이에는 높은 상관관계로 인해 Model의 정확도가 떨어질 수 있다.
+
+그리고 Target Var인 Temp와의 강한 상관 관계를 갖는 feature는
+CO2, CH4, N2O, CFC.12 변수가 있다.
+
+
+## 문제 2
+```{r}
+# 2004년 이후 데이터를 Test Set으로 설정
+cli_test <- subset(clichan, Year >= 2004 )
+str(cli_test)
+
+# 2003년까지 데이터를 Train set으로 설정
+cli_train <- subset(clichan, Year < 2004)
+str(cli_train)
+
+#분할 후 Year 및 Month 제외
+clichan <- clichan[,c(-1,-2)]
+cli_test <- cli_test[,c(-1,-2)]
+cli_train <- cli_train[,c(-1,-2)]
+
+#Training Set과 Test Set에서의 Temp 분포 비교
+ggplot(data = cli_test, aes(x=Temp), color = "red") + geom_density() +
+  geom_density(data=cli_train, aes(x=Temp), color = "blue") + theme_bw()
+
+#일반 Linear Regression 모델 
+p2lm <- lm(Temp~ ., data = cli_train)
+summary(p2lm)
+
+
+```
+
+train set과 test set에서의 Temp 분포가 상당히 다르다는걸 알 수 있음.
+
+a) p-value 값이 유의 수준보다 작으면 선형 관계가 성립한다고 볼 수 있다.
+MEI, TSI, Aerosols, CFC.11, CFC.12, Month 들이 Temp에 큰 영향을 미친다.
+
+b) N2O와 CFC-11은 음수 값을 가지며, 이는 일반적인 지식과 모순된다.
+앞서 1번 문제에서 각 feature들과의 상관관계를 살펴보았는데,
+상당히 많은 변수들 사이에서 상관 관계가 있었고,
+N2O CFC.11 사이에서도 유의한 상관 관계가 있는 것으로 나타났다.
+각 변수들 간의 상관관계는 모델의 분산을 크게 하여 예측 오차를 크게한다.
+
+결론적으로 각 feature간의 상관관계 때문에 이러한 모순이 나왔다고 할 수 있다.
+
+## 문제 3 
+### (a)
+```{r}
+# MEI, TSI, Aerosols, N2O 4개의 feature만 사용하여 regression model 만들기
+p3lm <- lm(Temp~ MEI + TSI + Aerosols + N2O, data = cli_train)
+summary(p3lm)
+```
+a) 1번 문제에서 N2O의 상관계수 값은 음수였고, 2번 문제에서는 양수였다.
+4개의 feature만을 사용하니 일반적인 지식과 모순되지 않는 결과가 도출되었다.
+
+
+### (b)
+```{r}
+#2번 모델에 대한 Test set에 대한 예측
+p2_test <- predict(p2lm, cli_test)
+
+#2번 모델 RMSE 값 계산
+sqrt(mean((p2_test - cli_test$Temp)^2))
+
+#3번 모델에 대한 Test set에 대한 예측
+p3_test <- predict(p3lm, cli_test)
+
+#3번 모델 RMSE 값 계산
+sqrt(mean((p3_test - cli_test$Temp)^2))
+```
+
+b) 2번 모델의 R^2 값: 0.7133 | Adj. R^2값:0.7037 | RMSE: 0.08439069
+3번 모델의 R^2 값: 0.6799 | Adj. R^2값: 0.6747 | RMSE: 0.08501107
+
+RMSE값이 더 작은 2번 모델을 선택하는 것이 더 타당하다.
+(R^2값은 training Data에 대한 model 정확도 의미)
+
+## 문제 4
+### (a)
+#### Forward selection
+```{r}
+#8개의 feature대상으로 Forward selection 진행
+p4_fwd <- regsubsets(Temp~., data= cli_train, nvmax = 8, method ="forward" )
+p4_fwd_summary <- summary(p4_fwd)
+p4_fwd_summary
+
+#R^2와 adj. R^2의 변화를 그래프로 확인해기
+p4_fwd_result <- data.frame(numvars = rep(1:8,2), val = c(p4_fwd_summary$rsq, 
+                  p4_fwd_summary$adjr2), type = c(rep("rsq",8), rep("adjr2",8)))
+
+ggplot(p4_fwd_result, aes(x=numvars, y=val, color = type)) +geom_point() +
+  geom_line() + labs(x="number or var", y="") + 
+  scale_color_discrete( labels = c("adjusted R2", "R2") )
+
+#adj. R^2의 최대값
+max(p4_fwd_summary$adjr2)
+#adj. R^2가 최대일 때 feature 수
+which.max(p4_fwd_summary$adjr2)
+
+
+# Forward Selection 에 대한 CV 수행: test Error를 효과적으로 비교하기 위함함
+# 10CV를 10번 반복
+train.control <- trainControl(method = "repeatedcv", number = 10, repeats = 10)
+
+set.seed(100)
+p4_fwd_cv <- train(Temp~., data=cli_train, method = "leapForward", 
+                   tuneGrid = data.frame(nvmax = 1:8), trControl = train.control)
+
+# feature 의 수의 변화에 대한 RMSE 크기 변화
+p4_fwd_cv$results
+
+#RMSE가 가장 작을 때 feature 수 확인하기
+p4_fwd_cv$bestTune
+
+# feature 의 수의 변화에 대한 RMSE 크기 변화 그래프
+ggplot(data= p4_fwd_cv$results, aes(x= nvmax, y=RMSE)) + 
+  geom_point() + geom_line() + 
+  geom_text(aes(label= round(RMSE, digit = 6)), vjust=-0.5)
+
+# Test set에 Test해보기
+p4_fwd_cv_test <- predict(p4_fwd_cv, cli_test)
+
+# Test Set에 대한 RMSE 확인
+RMSE(p4_fwd_cv_test, cli_test$Temp)
+
+```
+#### Backward Selection
+```{r}
+#8개의 feature대상으로 Backward selection 진행
+p4_bwd <- regsubsets(Temp~., data = cli_train, nvmax = 8, method="backward")
+p4_bwd_summary <- summary(p4_bwd)
+
+#adj. R^2의 최대값
+max(p4_bwd_summary$adjr2)
+#adj. R^2가 최대일 때 feature 수
+which.max(p4_bwd_summary$adjr2)
+
+## 10CV를 10번 반복 (앞에 train.control 사용)
+set.seed(100)
+p4_bwd_cv <- train(Temp~., data = cli_train, method = "leapBackward", 
+                   tuneGrid = data.frame(nvmax=1:8), trControl = train.control)
+
+# feature 의 수의 변화에 대한 RMSE 크기 변화
+p4_bwd_cv$results
+
+#RMSE가 가장 작을 때 feature 수 확인하기
+p4_bwd_cv$bestTune
+
+# feature 의 수의 변화에 대한 RMSE 크기 변화 그래프
+ggplot(data = p4_bwd_cv$results, aes(x=nvmax, y= RMSE)) + 
+  geom_line() + geom_point() +
+  geom_text( aes(label = round(RMSE, digit= 6)), vjust=-0.5)
+
+# Test Set에 Test 진행
+p4_bwd_cv_test <- predict(p4_bwd_cv, cli_test)
+RMSE(p4_bwd_cv_test, cli_test$Temp)
+
+```
+### (b)
+CV를 통해서 Forward, Backward를 모두 진행해봤을 때
+1. Forward는 최적 features 수는 7개, 
+Test Set을 이용하여 Test한 결과 RMSE는 0.08359067 인 것을 확인하였다.
+2. Backward는 최적 features 수 7개,
+Test Set을 이용하여 Test한 결과 RMSE는 0.08359067 인 것을 확인하였다.
+
+두 결과 모두 최적 feature 수 7개 및 RMSE 값이 같은 값이 나왔다.
+그래프 분석 결과 RMSE가 전체적으로 조금 더 낮은 backward를 선택한다.
+
+```{r}
+#최종 모델 만들기 Backward Selection으로 만든다.
+p4_best <- regsubsets(Temp~., data = clichan, nvmax = 8, method="backward")
+p4_best_coef <- coef(p4_best, 7)
+p4_best_coef
+```
+이렇게 Best 모델을 결정하였으며,
+최종 7개 feature는 MEI, CO2, N2O, CFC.11, CFC.12, TSI, Aerosols 이다.
+
+## 문제 5
+### (a)
+#### Forward Selection
+```{r}
+#기존 8개 features, 모든 features들 간의 Interaction effect, 3개 제곱항 추가한 모델
+p5lm <- lm( data = cli_train, 
+            Temp ~ (CFC.11 + CFC.12 + CO2 + N2O + CH4 + Aerosols + TSI + MEI)^2 + 
+             I(CO2^2) + I(CFC.11^2) + I(CFC.12^2) )
+
+p5lm_summary <- summary(p5lm)
+p5lm_summary
+
+# 10CV를 10번 반복
+train.control <- trainControl(method = "repeatedcv", number = 10, repeats = 10)
+
+# CV를 이용해 Forward Selection 진행
+# Coeff제외 총 39개의 feature가 들어감. (p5lm 구조 참고)
+set.seed(100)
+p5lm_fwd_cv <- train(Temp ~ (CFC.11 + CFC.12 + CO2 + N2O + CH4 + Aerosols + TSI + MEI)^2 + 
+             I(CO2^2) + I(CFC.11^2) + I(CFC.12^2), data = cli_train,
+             method = "leapForward", tuneGrid = data.frame(nvmax=1:39), 
+             trControl = train.control)
+
+#RMSE가 가장 작을 때 feature 수 확인하기
+p5lm_fwd_cv$bestTune
+
+# feature 의 수의 변화에 대한 RMSE 크기 변화 그래프
+ggplot(data = p5lm_fwd_cv$results, aes(x=nvmax, y= RMSE)) + 
+  geom_line() + geom_point()
+
+# Test Set에 Test 진행
+p5lm_fwd_cv_test <- predict(p5lm_fwd_cv, cli_test)
+RMSE(p5lm_fwd_cv_test, cli_test$Temp)
+
+```
+#### Backward Selection
+```{r}
+# 10CV를 10번 반복
+train.control <- trainControl(method = "repeatedcv", number = 10, repeats = 10)
+
+# CV를 이용해 Backward Selection 진행
+# Coeff제외 총 39개의 feature가 들어감. (p5lm 구조 참고)
+set.seed(100)
+p5lm_bwd_cv <- train(Temp ~ (CFC.11 + CFC.12 + CO2 + N2O + CH4 + Aerosols + TSI + MEI)^2 + 
+             I(CO2^2) + I(CFC.11^2) + I(CFC.12^2), data = cli_train,
+             method = "leapBackward", tuneGrid = data.frame(nvmax=1:39), 
+             trControl = train.control)
+
+#RMSE가 가장 작을 때 feature 수 확인하기
+p5lm_bwd_cv$bestTune
+
+# feature 의 수의 변화에 대한 RMSE 크기 변화 그래프
+ggplot(data = p5lm_bwd_cv$results, aes(x=nvmax, y= RMSE)) + 
+  geom_line() + geom_point()
+
+# Test Set에 Test 진행
+p5lm_bwd_cv_test <- predict(p5lm_bwd_cv, cli_test)
+RMSE(p5lm_bwd_cv_test, cli_test$Temp)
+```
+CV를 통해서 Forward, Backward를 모두 진행해봤을 때
+1. Forward는 최적 features 수는 13개, 
+Test Set을 이용하여 Test한 결과 RMSE는 0.09242062 인 것을 확인하였다.
+2. Backward는 최적 features 수 13개,
+Test Set을 이용하여 Test한 결과 RMSE는 0.1468438 인 것을 확인하였다.
+
+### (b)
+```{r}
+#Forward일 때 RMSE가 가장 작을 때(13) RMSE 확인하기
+p5lm_fwd_cv$results[13,]
+
+#Backward일 때 RMSE가 가장 작을 때(13) RMSE 확인하기
+p5lm_bwd_cv$results[13,]
+
+#Backward를 이용한 Best Model 선정
+p5lm_best <- regsubsets(Temp ~ (CFC.11 + CFC.12 + CO2 + N2O + CH4 + Aerosols + TSI + MEI)^2 + 
+             I(CO2^2) + I(CFC.11^2) + I(CFC.12^2), data = clichan, nvmax=39, method = "forward")
+
+#Best Model일 떄 포함되는 13개의 feauture 알아보기
+p5lm_best_coef <- coef(p5lm_best, 13)
+p5lm_best_coef
+
+```
+Cross validated RMSE는 각각 Forward시 0.08483681, Backward시 0.08619733였다.
+feature수도 같기 때문에 다른 고려 없이 Forward시 모델을 Best Model로 선정한다.
+
+그리고 이 때 최종 13개의 feature에 포함되는 변수는,
+TSI, MEI, CFC.11:CFC.12, CFC.11:CH4, CFC.11:Aerosols, CFC.11:MEI, CFC.12:CO2,
+CFC.12:Aerosols, CO2:N2O, CO2:CH4, CO2:Aerosols, CO2:MEI, CH4:Aerosols 이다.
+
+
+## 문제 6
+```{r}
+#문제 2번에서 수립했던 model에 대한 Test
+RMSE(p2_test, cli_test$Temp)
+
+#문제 3번에서 수립했던 model에 대한 Test
+RMSE(p3_test, cli_test$Temp)
+
+#문제 4번에서 수립했던 model에 대한 Test
+RMSE(p4_bwd_cv_test, cli_test$Temp)
+
+#문제 5에서 수립했던 model에 대한 Test
+RMSE(p5lm_fwd_cv_test, cli_test$Temp)
+
+```
+Test set에 Test해본 결과 RMSE가 가장 낮은 Model은 4번이었다.
+
+Accuracy를 높이기 위해서 영향이 높은 CO2, CFC.11, CFC.12의 제곱항과
+features사이의 모든 interaction을 추가한 5번 문제의 Model이 높을 것으로 예상했다.
+1번 문제를 풀 때 각 변수들 간의 상관관계가 높게 나타났었는데,
+아무래도 변수들 간의 상관관계가 영향을 미친 것 같다.
+
+그래서 5번 모델에서 상관관계만 제외한 모델을 만들어서 확인해보려고 한다.
+
+```{r}
+#5번 모델에서 상관관계를 제외한 모델 확인
+
+#Forward Selection
+
+# 10CV를 10번 반복
+train.control <- trainControl(method = "repeatedcv", number = 10, repeats = 10)
+
+set.seed(100)
+p6lm_fwd_cv <- train(Temp ~ (.) +  I(CO2^2) + I(CFC.11^2) + I(CFC.12^2),
+                     data = cli_train, method = "leapForward", 
+                     tuneGrid = data.frame(nvmax=1:11), trControl = train.control)
+
+#RMSE가 가장 작을 때 feature 수 확인하기
+p6lm_fwd_cv$bestTune
+
+# Test Set에 Test 진행
+p6lm_fwd_cv_test <- predict(p6lm_fwd_cv, cli_test)
+RMSE(p6lm_fwd_cv_test, cli_test$Temp)
+
+
+#Backward Selection
+
+set.seed(100)
+p6lm_bwd_cv <- train(Temp ~ (.) +  I(CO2^2) + I(CFC.11^2) + I(CFC.12^2),
+                     data = cli_train, method = "leapBackward", 
+                     tuneGrid = data.frame(nvmax=1:11), trControl = train.control)
+
+#RMSE가 가장 작을 때 feature 수 확인하기
+p6lm_bwd_cv$bestTune
+
+# Test Set에 Test 진행
+p6lm_bwd_cv_test <- predict(p6lm_bwd_cv, cli_test)
+RMSE(p6lm_bwd_cv_test, cli_test$Temp)
+
+
+```
+5번 모델에서 상관관계만 제외한 모델에서는 RMSE가 오히려 더 크게 나타났다.
+문제 5번에서 최대한 많은 변수들을 고려했을 때 13개의 변수에서-
+CO2, CFC.11, CFC.12는 영향력 있는 변수로 포함되지 않았다.
+따라서 CO2, CFC.11, CFC.12의 영향을 강하게 반영했던 제곱항 때문에
+오차가 더 크게 나온 것 같다.
+
+# Regression on Simulated Data
+
+## 랜덤 데이터 생성
+### (i)
+```{r}
+
+#크기가 200인 표준정규분포로부터 vector X생성
+set.seed(100)
+xvec <- rnorm(200, 0, 1)
+
+#크기가 200이고 평균이 0, 펴준편차가 4인 정규분포로부터 vector e생성
+set.seed(200)
+evec <- rnorm(200, 0, 4)
+
+```
+
+### (ii)
+```{r}
+
+#크기가 200인 Target Vector Y를 생성한다.
+yvec <- 1 + 2*xvec - 3*(xvec^2) + 4*(xvec^3) + evec
+
+```
+
+## 1
+```{r}
+
+# Y를 타겟으로, X~ X^10을 Feature 로 삼는 Dataframe 만들기
+regdata <- data.frame( Y = yvec, X = xvec, X2 = xvec^2, X3 = xvec^3, X4 = xvec^4, 
+                       X5 = xvec^5, X6 = xvec^6, X7 = xvec^7, X8 = xvec^8,
+                       X9 = xvec^9, X10 = xvec^10 )
+
+#10개 변수와 target변수 사이의 상관관계 시각화
+#e가 들어가 있어서 ggplot은 사용할 수가 없음음
+for( i in 2:11){
+  pairs.panels(regdata[,c(1, i)])
+    }
+  
+#시각화 한 번에 보기
+pairs.panels(regdata[,c("Y", "X", "X2", "X3", "X4", "X5", "X6", "X7", "X8", 
+                        "X9", "X10")]) + facet_wrap(~Y)
+```
+## 2
+```{r}
+
+#10개의 feature를 모두 포함하는 Linear Regression모델 만들기
+rs2lm <- lm(Y~., data = regdata)
+summary(rs2lm)
+```
+p값은 확인해보았을 때 통계적으로 유의한 변수가 없었다.
+B0 hat값은 0.77093, B1 hat값은 1.44287, B2 hat값은 -2.22584 ,B3 hat값은 5.32398로
+원래의 B값인 1, 2, -3, 4와 차이가 어느정도 있는 것을 확인하였다.
+
+## 3
+```{r}
+
+#X, X^2, X^3 3개 변수를 feature 로 Linear Regression model 만들기
+rs3lm <- lm(Y~ X + X2 + X3, data = regdata)
+summary(rs3lm)
+
+```
+feature들은 모두 통계적으로 유의하다.
+
+B0 hat값은 0.8996, B1 hat값은 2.4274, B2 hat값은 -2.9051 ,B3 hat값은 3.9557
+로 나타났고, 원래의 Beta값인 1, 2, -3, 4와 비슷하게 나타났다.
+
+## 4
+
+### 1) cv.glmnet 함수 사용하여 10-fold CV 실행
+```{r}
+# glmnet function 사용하기 위한 data 준비
+
+# X에는 Target인 Y를 뺴준다
+rs4rrX <- model.matrix(Y~., regdata)[,-1]
+# Y에는 Target인 Y만 포함
+rs4rrY <- regdata$Y
+
+#Lasso Regression 실행
+rs4lm <- glmnet(x = rs4rrX, y= rs4rrY, alpha =1)
+
+#model에 포함되는 feature수 그래프로 살펴보기
+plot(rs4lm, xvar = "lambda")
+
+
+# 1) cv.glmnet 함수 사용하여 10-fold CV 실행
+rs4lasso_cv1 <- cv.glmnet(x = rs4rrX, y= rs4rrY, alpha =1, nfolds = 10)
+
+rs4lasso_cv1
+
+# lambda값에 따른 RMSE 변화 그래프로 살펴보기
+plot(rs4lasso_cv1)
+
+#최적 lambda값 확인하기
+lmbd_lasso <- min(rs4lasso_cv1$lambda)
+lmbd_lasso
+
+#Regression coeffcient 확인하기
+coef(rs4lasso_cv1)
+```
+
+10-fold CV실행 결과 최적 lambda 값은 0.05889387 였고,
+X^1, X^2, X^3 세가지의 feature들이 포함되어 있었다.
+
+각 값은 X^1: 2.1430831, X2: -2.2721028, X3: 3.7582417 이었고,
+원래 모델의 Beta인 2, -3, 4와 비교하였을 때 오차 범위는 약 +- 0.3 이내로
+매우 비슷하게 나타났다고 할 수 있다.
+
+문제 3번을 통해서는 X, X^2, X^3은 유의한 feature들로 나온 반면에
+문제 2번에서 총 10개 변수를 입력하였을 땐 
+X, X^2, X^3 마저 무의미한 feature들로 나왔었다.
+
+하지만 Lasso Regression을 진행하였을 때, Best Lambda 값을 가질 때
+유의미한 세 Feature들만 남기고 유의미하지 않은 Coef값은 0으로 만들었다.
+
+따라서 Lasso Regression은 무의미한 변수의 coef값을 0으로 만듦으로서
+더 정확한 Model을 만들 수 있도록 도와주는 동시에,
+Variable Selection의 효과도 얻을 수 있어 매우 편리한 Regression이라 생각된다. 
+
+### 2) train 함수 사용하여 10-fold CV 10회 실행
+```{r}
+#10-fold CV 10회 실행
+trainControlrs4 <- trainControl(method="repeatedcv", number =10, repeats =10)
+
+rs4lasso <- train(Y~., data = regdata, method = "glmnet", 
+                  tuneGrid = data.frame(alpha=1, lambda= seq(0, 11, length=110)),
+                  trControl = trainControlrs4)
+rs4lasso
+
+# Regulation paprameter(lambda)값에 따른 RMSE 변화 그래프로 살펴보기
+ggplot(rs4lasso)
+
+#최적의 lambda값 확인하기
+rs4lasso$bestTune
+
+```
+
+Train 함수로는 Coef값을 확인하는 방법은 찾지 못하였다.
+rs4lasso/finalModel/beta에 들어갔을 때 CV하며 찾은 모든 Model에 대한
+Coef값은 존재하였지만, Best Lambda일 때 coef 값을 찾는 방법은 찾지 못하였다.
+(4번에 대한 답은 위에서 모두 작성함)
+
+```{r}
+
+```
+
