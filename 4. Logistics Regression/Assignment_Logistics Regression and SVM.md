@@ -34,7 +34,7 @@
 1. 모델에 몇 개의 변수가 포함되었는가?  
 2. Threshold k = 0.5일때 test set에 대한 confusion matrix를 계산해 보자.  
 
-### 8. Training set을 대상으로 Lasso regression을 적용하여 logistic regression model을 수립해보자. CV의 결과 바탕으로 모델에 포함되는 feature의 수와 예측정확도를 모두 고려했을 때 적합한 모델을 선택하자.
+#### 8. Training set을 대상으로 Lasso regression을 적용하여 logistic regression model을 수립해보자. CV의 결과 바탕으로 모델에 포함되는 feature의 수와 예측정확도를 모두 고려했을 때 적합한 모델을 선택하자.
 1. 모델에 어떠한 변수들이 포함되었는가?  
 2. Threshold k = 0.5일때 test set에 대한 confusion matrix를 계산해 보자.  
 
