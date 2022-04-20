@@ -5,9 +5,11 @@ Machine Learning Study for Data Analytics
 
 #### 2. 보고서는 뷰를 위해 현재 Git Site를 구축 중에 있습니다. 완성되는대로 이곳에 링크를 게시하겠습니다.  
 
-#### 3. 분석들은 모두 R로 수행되었습니다.
+#### 3. 보고서는 폴더 안 html 파일을 다운받아 열어주세요.  
 
-#### 4. 이 수업에서 배운 기법들은 다음과 같습니다.  
+#### 4. 분석들은 모두 R로 수행되었습니다.
+
+#### 5. 이 수업에서 배운 기법들은 다음과 같습니다.  
 1) Data Visualization
 2) Data pre-Processing
 3) k-NN Algorithm
